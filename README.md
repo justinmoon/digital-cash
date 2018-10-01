@@ -32,8 +32,6 @@ python3 -m pip install -r requirements.txt
 jupyter notebook
 ```
 
-This will open up your web browser to a page that looks like the image below. This is [Jupyter Notebook](http://jupyter.org/), which is basically a little website that’s run on only your computer. Click the “Lesson 0 - Introduction to Jupyter.ipynb” link to learn more!
+This will open up your web browser to a page that looks like the image below. This is [Jupyter Notebook](http://jupyter.org/), which is basically a little website that’s run on only your computer.
 
-![image](./images/jupyter.png)
-
-The first lesson can be found in the `tinychain/lesson-one.ipynb`. Open that file in you Jupyter notebook window.
+Click the "PNGCoin Workbook.ipynb" link to follow along with this first lesson.
