@@ -24,8 +24,8 @@ Go to your terminal, type “python3” and hit enter. If you don’t see a “p
 Execute the following command in your terminal to clone the course and access the introductory “Lesson 0”:
 
 ```
-git clone https://github.com/superquest/buidlbootcamp.git
-cd buidlbootcamp/tinychain
+git clone https://github.com/superquest/digital-cash.git
+cd digital-cash
 python3 -m virtualenv venv
 source venv/bin/activate
 python3 -m pip install -r requirements.txt
