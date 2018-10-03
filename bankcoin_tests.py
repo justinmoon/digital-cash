@@ -10,16 +10,6 @@ alice_private_key = SigningKey.generate(curve=SECP256k1)
 bob_public_key = bob_private_key.get_verifying_key()
 alice_public_key = alice_private_key.get_verifying_key()
 
-def test_copy():
-    bank = Bank()
-    from copy import deepcopy
-    coin = bank.issue(alice_public_key)
-    copied_coin = deepcopy(coin)
-    assert coin == copied_coin
-    assert coin is not copied_coin
-    coin.transfers.append("puppy")
-    assert len(coin.transfers) != len(copied_coin.transfers)
-
 def test_valid_transfers():
     # Issue a coin and transfer it twice
 
