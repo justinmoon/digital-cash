@@ -1,10 +1,16 @@
-import pickle
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize
 
 
 bank_private_key = SigningKey.generate(curve=SECP256k1)
 bank_public_key = bank_private_key.get_verifying_key()
+
+
+def transfer_message(previous_signature, public_key):
+    return serialize({
+        "previous_signature": previous_signature,
+        "next_owner_public_key": public_key,
+    })
 
 
 class Transfer:
@@ -22,7 +28,7 @@ class ECDSACoin:
     def validate(self):
         # Check the first transfer
         transfer = self.transfers[0]
-        message = pickle.dumps(transfer.public_key)
+        message = serialize(transfer.public_key)
         assert bank_public_key.verify(transfer.signature, message)
 
         # Check the subsequent transfers
@@ -31,7 +37,8 @@ class ECDSACoin:
             # Check previous owner signed this transfer using their private key
             assert previous_transfer.public_key.verify(
                 transfer.signature,
-                previous_transfer.signature,
+                transfer_message(previous_transfer.signature, transfer.public_key),
+
             )
             previous_transfer = transfer
 
