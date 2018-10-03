@@ -28,7 +28,7 @@ class Transfer:
     def __repr__(self):
         return f"Transfer(signature={self.signature}, public_key_bytes={self.public_key.to_string()}"
 
-class ECDSACoin:
+class BankCoin:
 
     def __init__(self, transfers):
         self.id = uuid.uuid1()
@@ -38,7 +38,7 @@ class ECDSACoin:
         return str(self.id) == str(other.id) and self.transfers == other.transfers
 
     def __repr__(self):
-        return f"ECDSACoin(transfers={self.transfers})"
+        return f"BankCoin(transfers={self.transfers})"
 
     @property
     def last_transfer(self):
@@ -58,6 +58,8 @@ class ECDSACoin:
 class Bank:
 
     def __init__(self, private_key=None):
+        # TODO since users don't validate txns anymore
+        # the bank probably doesn't need to give out signatures
         if not private_key:
             private_key = SigningKey.generate(curve=SECP256k1)
         self.private_key = private_key
@@ -78,7 +80,7 @@ class Bank:
         )
         
         # Create and return the coin with just the issuing transfer
-        coin = ECDSACoin(transfers=[transfer])
+        coin = BankCoin(transfers=[transfer])
 
         # Put it in out database of coins
         self.coins[coin.id] = deepcopy(coin)
