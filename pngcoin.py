@@ -14,7 +14,7 @@ def handle_user_input(user_input):
         return False
     else:
         user_input  = input('Please enter "y" or "n"')
-        handle_user_input(user_input)
+        return handle_user_input(user_input)
 
 
 ############
