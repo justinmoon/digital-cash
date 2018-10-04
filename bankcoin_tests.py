@@ -1,7 +1,6 @@
-import pytest
+from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
-import bankcoin
-from bankcoin import Transfer, Bank, ECDSACoin, transfer_message
+from bankcoin import Transfer, Bank
 from utils import serialize
 
 # The usual suspects
@@ -16,6 +15,7 @@ def test_valid_transfers():
     # Bank issues coins to Alice
     bank = Bank()
     coin = bank.issue(alice_public_key)
+    initial_coin_copy = deepcopy(coin)
     bank.validate_transfers(coin)
 
     assert bank.fetch_coins(alice_public_key) == [coin]
@@ -28,8 +28,9 @@ def test_valid_transfers():
     )
     bank.validate_transfers(coin)
 
-    assert len(bank.fetch_coins(alice_public_key)) == 1
-    assert len(bank.fetch_coins(bob_public_key)) == 0
+    # Bank -- source of truth -- doesn't know about transfers until told
+    assert bank.fetch_coins(alice_public_key) == [initial_coin_copy]
+    assert bank.fetch_coins(bob_public_key) == []
 
     # Update bank's observation and check balances
     bank.observe_coin(coin)
