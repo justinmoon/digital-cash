@@ -1,7 +1,3 @@
-"""
-* comparisons are a PITA here. so absurd that VerifyingKey.to_string() must be called
-* sucks that all my classes need __eq__ methods
-"""
 import uuid
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
@@ -25,8 +21,6 @@ class Transfer:
         return self.signature == other.signature and \
                self.public_key.to_string() == other.public_key.to_string()
 
-    def __repr__(self):
-        return f"Transfer(signature={self.signature}, public_key_bytes={self.public_key.to_string()}"
 
 class BankCoin:
 
@@ -37,23 +31,17 @@ class BankCoin:
     def __eq__(self, other):
         return str(self.id) == str(other.id) and self.transfers == other.transfers
 
-    def __repr__(self):
-        return f"BankCoin(transfers={self.transfers})"
-
     @property
     def last_transfer(self):
         return self.transfers[-1]
 
-
     def transfer(self, owner_private_key, recipient_public_key):
-        """Appends to self.transfers"""
         message = transfer_message(self.last_transfer.signature, recipient_public_key)
         transfer = Transfer(
             signature=owner_private_key.sign(message),
             public_key=recipient_public_key,
         )
         self.transfers.append(transfer)
-
 
 class Bank:
 
@@ -73,9 +61,8 @@ class Bank:
         message = serialize(public_key)
         
         # Create the first transfer, signing with the banks private key
-        signature = self.private_key.sign(message)
         transfer = Transfer(
-            signature=signature,
+            signature=None,
             public_key=public_key,
         )
         
@@ -108,11 +95,6 @@ class Bank:
         return coins
 
     def validate_transfers(self, coin):
-        # Check the first transfer
-        transfer = coin.transfers[0]
-        message = serialize(transfer.public_key)
-        assert self.public_key.verify(transfer.signature, message)
-
         # Check the subsequent transfers
         previous_transfer = coin.transfers[0]
         for transfer in coin.transfers[1:]:
