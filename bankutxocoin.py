@@ -28,7 +28,7 @@ class TxIn:
 
     @property
     def outpoint(self):
-        return (self.id, self.index)
+        return (self.tx_id, self.index)
 
 class TxOut:
 
@@ -40,7 +40,7 @@ class TxOut:
 
     @property
     def outpoint(self):
-        return (self.id, self.index)
+        return (self.tx_id, self.index)
 
 class Bank:
 
@@ -50,6 +50,8 @@ class Bank:
     def update_utxo(self, tx):
         for tx_out in tx.tx_outs:
             self.utxo[tx_out.outpoint] = tx_out
+        for tx_in in tx.tx_ins:
+            del self.utxo[tx_in.outpoint]
 
     def issue(self, amount, public_key):
         id_ = str(uuid.uuid4())
@@ -57,7 +59,7 @@ class Bank:
         tx_outs = [TxOut(tx_id=id_, index=0, amount=amount, public_key=public_key)]
         tx = Tx(id=id_, tx_ins=tx_ins, tx_outs=tx_outs)
 
-        self.update_utxo(self, tx)
+        self.update_utxo(tx)
 
         return tx
 
@@ -84,11 +86,11 @@ class Bank:
     def handle_tx(self, tx):
         # Save to self.utxo if it's valid
         self.validate_tx(tx)
-        self.update_utxo(self, tx)
+        self.update_utxo(tx)
 
     def fetch_utxo(self, public_key):
         return [utxo for utxo in self.utxo.values() 
-                if utxo.public_key == public_key]
+                if utxo.public_key.to_string() == public_key.to_string()]
 
     def fetch_balance(self, public_key):
         # Fetch utxo associated with this public key
