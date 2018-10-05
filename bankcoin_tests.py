@@ -1,6 +1,6 @@
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
-from bankcoin import Transfer, Bank
+from mybankcoin import Transfer, Bank
 from utils import serialize
 
 # The usual suspects
@@ -16,23 +16,21 @@ def test_valid_transfers():
     bank = Bank()
     coin = bank.issue(alice_public_key)
     initial_coin_copy = deepcopy(coin)
-    bank.validate_transfers(coin)
 
-    assert bank.fetch_coins(alice_public_key) == [coin]
+    assert bank.fetch_coins(alice_public_key) == [initial_coin_copy]
     assert bank.fetch_coins(bob_public_key) == []
 
-    # Alice sends to Bob
+    # Alice constructs transfer to Bob, but doesn't tell the bank
     coin.transfer(
         owner_private_key=alice_private_key,
         recipient_public_key=bob_public_key,
     )
-    bank.validate_transfers(coin)
 
     # Bank -- source of truth -- doesn't know about transfers until told
     assert bank.fetch_coins(alice_public_key) == [initial_coin_copy]
     assert bank.fetch_coins(bob_public_key) == []
 
-    # Update bank's observation and check balances
+    # Alice tells the bank, which updates it's balances
     bank.observe_coin(coin)
     assert bank.fetch_coins(alice_public_key) == []
     assert bank.fetch_coins(bob_public_key) == [coin]
@@ -40,11 +38,8 @@ def test_valid_transfers():
     # Bob sends to Bank
     coin.transfer(
         owner_private_key=bob_private_key,
-        recipient_public_key=bank.public_key,
+        recipient_public_key=alice_public_key,
     )
-    bank.validate_transfers(coin)
-
-    # Update bank's observation and check balances
     bank.observe_coin(coin)
-    assert bank.fetch_coins(alice_public_key) == []
+    assert bank.fetch_coins(alice_public_key) == [coin]
     assert bank.fetch_coins(bob_public_key) == []
