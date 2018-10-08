@@ -87,7 +87,7 @@ class Bank:
         # Return tx_outs associated with public_key and not in ^^ list
         return [tx_out for tx in self.txs.values() 
                    for i, tx_out in enumerate(tx.tx_outs)
-                       if public_key == tx_out.public_key
+                       if public_key.to_string() == tx_out.public_key.to_string()
                        and (tx.id, i) not in spent_pairs]
 
     def fetch_balance(self, public_key):
