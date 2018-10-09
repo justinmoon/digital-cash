@@ -148,7 +148,7 @@ def cli():
             help='client or server?')
     parser.add_argument('-c', '--command', type=str, 
             help='What command to send? (client role only)')
-    parser.add_argument('d', '--data', type=str, 
+    parser.add_argument('-d', '--data', type=str, 
             default="",
             help='Data to send alongside command? (client role only)')
     return parser.parse_args()
