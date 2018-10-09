@@ -1,4 +1,4 @@
-import uuid, socketserver, socket, sys
+import uuid, socketserver, socket, sys, argparse
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
@@ -99,21 +99,18 @@ class Bank:
         # Sum the amounts
         return sum([tx_out.amount for tx_out in unspents])
 
-def respond(request, command, data):
-    response = {
+
+def prepare_message(command, data):
+    return {
         "command": command,
         "data": data,
     }
-    return request.sendall(serialize(response))
 
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def respond(self, command, data):
-        response = {
-            "command": command,
-            "data": data,
-        }
+        response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
 
     def handle(self):
@@ -133,26 +130,39 @@ def server():
     server.serve_forever()
 
 
-def connect(message):
+def connect(command, data):
+    message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         s.sendall(serialize(message))
         _data = s.recv(1024*4)
-        print(_data)
         data = deserialize(_data)
 
     print('Received', data)
     return data
 
-def client(command):
-    message = {"command": command}
-    if command == "ping":
-        connect(message)
+
+def cli():
+    parser = argparse.ArgumentParser(description='BankNetCoin')
+    parser.add_argument('role', type=str, nargs="?",
+            help='client or server?')
+    parser.add_argument('-c', '--command', type=str, 
+            help='What command to send? (client role only)')
+    parser.add_argument('d', '--data', type=str, 
+            default="",
+            help='Data to send alongside command? (client role only)')
+    return parser.parse_args()
+
+
+def main():
+    args = cli()
+    if args.role == "client":
+        connect(args.command, args.data)
+    elif args.role == "server":
+        server()
+    else:
+        print(f"Invalid role: {args.role}")
 
 
 if __name__ == '__main__':
-    command = sys.argv[1]
-    if command == "client":
-        client("ping")
-    elif command == "server":
-        server()
+    main()
