@@ -1,8 +1,24 @@
+"""
+BanknetCoin
+
+Usage:
+  naval_fate.py server
+  naval_fate.py ping
+  naval_fate.py tx <from> <to> <amount>
+  naval_fate.py balance <name>
+
+Options:
+  -h --help     Show this screen.
+"""
+
 import uuid, socketserver, socket, sys, argparse
+
+from docopt import docopt
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
+from identities import lookup_key
 
 class Tx:
 
@@ -114,20 +130,37 @@ class TCPHandler(socketserver.BaseRequestHandler):
         return self.request.sendall(serialize(response))
 
     def handle(self):
-        data = self.request.recv(1024*4).strip()
-        message = deserialize(data)
+        message_bytes = self.request.recv(1024*4).strip()
+        message = deserialize(message_bytes)
         command = message["command"]
+        data = message["data"]
 
         if command == "ping":
             self.respond(command="pong", data="")
 
+        if command == "tx":
+            try:
+                bank.handle_tx(data)
+                self.respond(command="tx-response", data="accepted")
+            except:
+                self.respond(command="tx-response", data="rejected")
+
+        if command == "balance":
+            balance = bank.fetch_balance(data)
+            self.respond(command="balance-response", data=balance)
+
 
 HOST, PORT = 'localhost', 9002
+bank = Bank()
 
 
 def server():
     server = socketserver.TCPServer((HOST, PORT), TCPHandler)
     server.serve_forever()
+
+
+def send_value():
+    pass
 
 
 def connect(command, data):
@@ -142,27 +175,44 @@ def connect(command, data):
     return data
 
 
-def cli():
-    parser = argparse.ArgumentParser(description='BankNetCoin')
-    parser.add_argument('role', type=str, nargs="?",
-            help='client or server?')
-    parser.add_argument('-c', '--command', type=str, 
-            help='What command to send? (client role only)')
-    parser.add_argument('-d', '--data', type=str, 
-            default="",
-            help='Data to send alongside command? (client role only)')
-    return parser.parse_args()
-
-
-def main():
-    args = cli()
-    if args.role == "client":
-        connect(args.command, args.data)
-    elif args.role == "server":
+def main(args):
+    if args["server"]:
+        from identities import alice_public_key
+        bank.issue(1000, alice_public_key)
         server()
+    elif args["ping"]:
+        connect("ping", "")
+    elif args["balance"]:
+        name = args["<name>"]
+        private_key = lookup_key(name)
+        public_key = private_key.get_verifying_key()
+        connect("balance", public_key)
+    elif args["tx"]:
+        sender_private_key = lookup_key(args["<from>"])
+        sender_public_key = sender_private_key.get_verifying_key()
+        recipient_private_key = lookup_key(args["<to>"])
+        recipient_public_key = recipient_private_key.get_verifying_key()
+        amount = int(args["<amount>"])
+
+        utxo = bank.fetch_utxo(sender_public_key)
+        utxo_sum = sum([u.amount for u in utxo])
+
+        tx_ins = [
+            TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None)
+            for tx_out in utxo
+        ]
+        tx_id = uuid.uuid4()
+        tx_outs = [
+            TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
+            TxOut(tx_id=tx_id, index=1, amount=utxo_sum-amount, public_key=sender_public_key),
+        ]
+        tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
+        for i in range(len(tx.tx_ins)):
+            tx.sign_input(i, sender_public_key)
+        connect("tx", tx)
     else:
-        print(f"Invalid role: {args.role}")
+        print("Invalid commands")
 
 
 if __name__ == '__main__':
-    main()
+    main(docopt(__doc__))
