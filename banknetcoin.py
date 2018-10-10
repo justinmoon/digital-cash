@@ -2,10 +2,10 @@
 BanknetCoin
 
 Usage:
-  naval_fate.py server
-  naval_fate.py ping
-  naval_fate.py tx <from> <to> <amount>
-  naval_fate.py balance <name>
+  banknetcoin.py server
+  banknetcoin.py ping
+  banknetcoin.py tx <from> <to> <amount>
+  banknetcoin.py balance <name>
 
 Options:
   -h --help     Show this screen.
