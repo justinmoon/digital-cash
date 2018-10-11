@@ -68,8 +68,7 @@ class Block:
 
 class Bank:
 
-    def __init__(self, id):
-        self.id = id
+    def __init__(self):
         self.chain = []
         self.utxo = {}
 
