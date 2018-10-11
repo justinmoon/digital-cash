@@ -19,7 +19,10 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import lookup_key
+from identities import lookup_key, bank_private_key, bank_public_key
+
+
+NUM_BANKS = 3
 
 
 class Tx:
@@ -63,12 +66,26 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, height):
+    def __init__(self, height, timestamp, txns, signature=None):
         self.height = height
+        self.timestamp = timestamp
+        self.signature = signature
+        self.txns = txns
+
+    @property
+    def message(self):
+        # FIXME improve variable name
+        return serialize([self.height, self.timestamp, self.txns])
+
+    def sign(self, private_key):
+        # message just omits the signature
+        self.signature = private_key.sign(self.message)
 
 class Bank:
 
-    def __init__(self):
+    def __init__(self, id):
+        self.next_id = 0
+        self.id = id
         self.blocks = []
         self.utxo = {}
 
@@ -133,7 +150,12 @@ class Bank:
 
     def handle_block(self, block):
         assert block.height == len(self.blocks)
+
+        public_key = bank_public_key(self.next_id)
+        public_key.verify(block.signature, block.message)
+
         self.blocks.append(block)
+        self.next_id = (self.next_id + 1) % NUM_BANKS
 
 
 def prepare_message(command, data):
@@ -171,7 +193,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
 
 HOST, PORT = 'localhost', 9002
-bank = Bank()
+bank = Bank(0)  # FIXME: os.environ["NODE_ID"]
 
 
 def server():
