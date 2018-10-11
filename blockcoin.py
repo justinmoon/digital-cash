@@ -1,11 +1,12 @@
 """
-BanknetCoin
+BlockCoin
 
 Usage:
-  banknetcoin.py server
-  banknetcoin.py ping
-  banknetcoin.py tx <from> <to> <amount>
-  banknetcoin.py balance <name>
+  blockcoin.py server
+  blockcoin.py ping
+  blockcoin.py tx <from> <to> <amount>
+  blockcoin.py balance <name>
+  blockcoin.py block <height>
 
 Options:
   -h --help     Show this screen.
@@ -19,6 +20,7 @@ from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
 from identities import lookup_key
+
 
 class Tx:
 
@@ -59,9 +61,16 @@ class TxOut:
     def outpoint(self):
         return (self.tx_id, self.index)
 
+class Block:
+
+    def __init__(self, height):
+        self.height = height
+
 class Bank:
 
-    def __init__(self):
+    def __init__(self, id):
+        self.id = id
+        self.chain = []
         self.utxo = {}
 
     def update_utxo(self, tx):
@@ -114,6 +123,17 @@ class Bank:
         unspents = self.fetch_utxo(public_key)
         # Sum the amounts
         return sum([tx_out.amount for tx_out in unspents])
+
+    def schedule_next_block(self):
+        # submit a block `Constants.block_interval` seconds
+        # handle_block calls this if it is our turn
+        pass
+
+    def make_block(self):
+        pass
+
+    def handle_block(self, block):
+        pass
 
 
 def prepare_message(command, data):
