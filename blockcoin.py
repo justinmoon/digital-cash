@@ -69,7 +69,7 @@ class Block:
 class Bank:
 
     def __init__(self):
-        self.chain = []
+        self.blocks = []
         self.utxo = {}
 
     def update_utxo(self, tx):
@@ -132,7 +132,8 @@ class Bank:
         pass
 
     def handle_block(self, block):
-        pass
+        assert block.height == len(self.blocks)
+        self.blocks.append(block)
 
 
 def prepare_message(command, data):
