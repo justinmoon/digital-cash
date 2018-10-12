@@ -12,7 +12,7 @@ Options:
   -h --help     Show this screen.
 """
 
-import uuid, socketserver, socket, sys, argparse
+import uuid, socketserver, socket, sys, argparse, time
 
 from docopt import docopt
 from copy import deepcopy
@@ -125,11 +125,6 @@ class Bank:
 
         assert in_sum == out_sum
 
-    def handle_tx(self, tx):
-        # Save to self.utxo if it's valid
-        self.validate_tx(tx)
-        self.update_utxo(tx)
-
     def fetch_utxo(self, public_key):
         return [utxo for utxo in self.utxo.values() 
                 if utxo.public_key.to_string() == public_key.to_string()]
@@ -151,11 +146,36 @@ class Bank:
     def handle_block(self, block):
         assert block.height == len(self.blocks)
 
-        public_key = bank_public_key(self.next_id)
-        public_key.verify(block.signature, block.message)
+        # Genesis block has no signature
+        if block.height > 0:
+            public_key = bank_public_key(self.next_id)
+            public_key.verify(block.signature, block.message)
 
+        # Check the transactions are valid
+        for tx in block.txns:
+            self.validate_tx(tx)
+
+        # If they're all good, update self.blocks and self.utxo
+        for tx in block.txns:
+            self.update_utxo(tx)
+        
+        # Add the block and increment the id of bank who will report next block
         self.blocks.append(block)
         self.next_id = (self.next_id + 1) % NUM_BANKS
+
+    def airdrop(self, tx):
+        """Special logic to execute an airdrop transaction"""
+        assert len(self.blocks) == 0
+
+        # Update utxos
+        self.update_utxo(tx)
+
+        # Update blockchain
+        block = Block(height=0, timestamp=time.time(), signature=None, txns=[tx])
+        self.blocks.append(block)
+
+
+
 
 
 def prepare_message(command, data):
@@ -182,6 +202,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
         if command == "tx":
             try:
+                # FIXME: this method no longer exists. Logic needs complete reboot.
                 bank.handle_tx(data)
                 self.respond(command="tx-response", data="accepted")
             except:
@@ -190,6 +211,39 @@ class TCPHandler(socketserver.BaseRequestHandler):
         if command == "balance":
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
+
+
+def send_value(bank, sender_private_key, recipient_public_key, amount):
+    # Fetch utxos
+    sender_public_key = sender_private_key.get_verifying_key()
+    utxo = bank.fetch_utxo(sender_public_key)
+    utxo_sorted = sorted(utxo, key=lambda tx_out: tx_out.amount)
+    utxo_sum = sum([u.amount for u in utxo])
+
+    # Construct tx.tx_outs
+    tx_ins = []
+    tx_in_sum = 0
+    for tx_out in utxo_sorted:
+        tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
+        tx_in_sum += tx_out.amount
+        if tx_in_sum > amount:
+            break
+
+    assert tx_in_sum >= amount
+
+    # Construct tx.tx_outs
+    tx_id = uuid.uuid4()
+    change = tx_in_sum - amount
+    tx_outs = [
+        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
+        TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
+    ]
+
+    # Construct tx and sign inputs
+    tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
+    for i in range(len(tx.tx_ins)):
+        tx.sign_input(i, sender_private_key)
+    return tx
 
 
 HOST, PORT = 'localhost', 9002
