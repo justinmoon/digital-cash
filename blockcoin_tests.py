@@ -2,29 +2,23 @@ import pytest, time, uuid, ecdsa
 import identities
 from blockcoin import *
 
-def make_tx(sender_private_key, recipient_public_key, amount):
-    # FIXME UNFINISHED
-    utxo = bank.fetch_utxo(sender_public_key)
-    # FIXME: sort by ascending fee. Add transactions until amount is met ...
-    utxo_sum = sum([u.amount for u in utxo])
-    tx_ins = [
-        TxIn(tx_id=coinbase.id, index=0, signature=None),
-    ]
-    tx_id = uuid.uuid4()
-    tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=10, public_key=bob_public_key), 
-        TxOut(tx_id=tx_id, index=1, amount=990, public_key=alice_public_key),
-    ]
-    tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
-    tx.sign_input(0, sender_private_key)
+
+def airdrop_tx():
+    id = str(uuid.uuid4()), 
+    tx = Tx(
+        id=id, 
+        tx_ins=[], 
+        tx_outs=[
+            TxOut(tx_id=id, index=0, amount=500_000, public_key=identities.bob_public_key), 
+            TxOut(tx_id=id, index=1, amount=500_000, public_key=identities.alice_public_key),
+        ],
+    )
     return tx
 
 
 def test_blocks():
     bank = Bank(id=0)
     bank_private_key = identities.bank_private_key(bank.id)
-
-    txns = []
 
     # Good block
     block = Block(height=0, timestamp=time.time(), txns=[])
@@ -49,9 +43,31 @@ def test_blocks():
         bank.handle_block(block)
 
 
+def test_airdrop():
+    bank = Bank(id=0)
+    tx = airdrop_tx()
+    bank.airdrop(tx)
+
+    assert 500_000 == bank.fetch_balance(identities.alice_public_key)
+    assert 500_000 == bank.fetch_balance(identities.bob_public_key)
+
+
 def test_utxo():
-    pass
+    bank = Bank(id=0)
+    tx = airdrop_tx()
+    bank.airdrop(tx)
+    assert len(bank.blocks) == 1
 
+    # Alice sends 10 to Bob
+    tx = send_value(
+        bank=bank,
+        sender_private_key=identities.alice_private_key,
+        recipient_public_key=identities.bob_public_key,
+        amount=10
+    )
+    block = Block(height=1, timestamp=time.time(), txns=[tx])
+    block.sign(identities.bank_private_key(0))
+    bank.handle_block(block)
 
-def test_block_production():
-    pass
+    assert 500_000 - 10 == bank.fetch_balance(identities.alice_public_key)
+    assert 500_000 + 10 == bank.fetch_balance(identities.bob_public_key)
