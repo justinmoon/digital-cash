@@ -175,7 +175,38 @@ class Bank:
         self.blocks.append(block)
 
 
+def send_value(bank, sender_private_key, recipient_public_key, amount):
+    # Fetch utxos
+    sender_public_key = sender_private_key.get_verifying_key()
+    utxo = bank.fetch_utxo(sender_public_key)
+    utxo_sorted = sorted(utxo, key=lambda tx_out: tx_out.amount)
+    utxo_sum = sum([u.amount for u in utxo])
 
+    # Construct tx.tx_outs
+    tx_ins = []
+    tx_in_sum = 0
+    for tx_out in utxo_sorted:
+        tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
+        tx_in_sum += tx_out.amount
+        if tx_in_sum > amount:
+            break
+
+    # Make sure sender can afford it
+    assert tx_in_sum >= amount
+
+    # Construct tx.tx_outs
+    tx_id = uuid.uuid4()
+    change = tx_in_sum - amount
+    tx_outs = [
+        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
+        TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
+    ]
+
+    # Construct tx and sign inputs
+    tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
+    for i in range(len(tx.tx_ins)):
+        tx.sign_input(i, sender_private_key)
+    return tx
 
 
 def prepare_message(command, data):
@@ -211,39 +242,6 @@ class TCPHandler(socketserver.BaseRequestHandler):
         if command == "balance":
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
-
-
-def send_value(bank, sender_private_key, recipient_public_key, amount):
-    # Fetch utxos
-    sender_public_key = sender_private_key.get_verifying_key()
-    utxo = bank.fetch_utxo(sender_public_key)
-    utxo_sorted = sorted(utxo, key=lambda tx_out: tx_out.amount)
-    utxo_sum = sum([u.amount for u in utxo])
-
-    # Construct tx.tx_outs
-    tx_ins = []
-    tx_in_sum = 0
-    for tx_out in utxo_sorted:
-        tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
-        tx_in_sum += tx_out.amount
-        if tx_in_sum > amount:
-            break
-
-    assert tx_in_sum >= amount
-
-    # Construct tx.tx_outs
-    tx_id = uuid.uuid4()
-    change = tx_in_sum - amount
-    tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
-        TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
-    ]
-
-    # Construct tx and sign inputs
-    tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
-    for i in range(len(tx.tx_ins)):
-        tx.sign_input(i, sender_private_key)
-    return tx
 
 
 HOST, PORT = 'localhost', 9002
