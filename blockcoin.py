@@ -83,11 +83,13 @@ class Block:
 
 class Bank:
 
-    def __init__(self, id):
+    def __init__(self, id, private_key):
         self.next_id = 0
         self.id = id
         self.blocks = []
         self.utxo = {}
+        self.mempool = []
+        self.private_key = private_key
 
     def update_utxo(self, tx):
         for tx_out in tx.tx_outs:
@@ -105,11 +107,19 @@ class Bank:
 
         return tx
 
+    @property
+    def mempool_outpoints(self):
+        return [tx_in.outpoint for tx in self.mempool for tx_in in tx]
+
     def validate_tx(self, tx):
         in_sum = 0
         out_sum = 0
         for tx_in in tx.tx_ins:
+            # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo
+
+            # No pending transactions spending this same output
+            assert tx_in.outpoint not in self.mempool_outpoints
 
             tx_out = self.utxo[tx_in.outpoint]
             # Verify signature using public key of TxOut we're spending
@@ -141,7 +151,20 @@ class Bank:
         pass
 
     def make_block(self):
-        pass
+        # Reset mempool
+        txns = deepcopy(self.mempool)  # FIXME???
+        self.mempool = []
+        block = Block(
+            height=len(self.blocks),
+            timestamp=time.time(),
+            txns=txns
+        )
+        block.sign(self.private_key)
+        return block
+
+    def handle_tx(self, tx):
+        self.validate_tx(tx)
+        self.mempool.append(tx)
 
     def handle_block(self, block):
         assert block.height == len(self.blocks)
@@ -245,7 +268,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
 
 HOST, PORT = 'localhost', 9002
-bank = Bank(0)  # FIXME: os.environ["NODE_ID"]
+# FIXME: os.environ["NODE_ID"]
+bank = Bank(id=0, private_key=bank_private_key(0))
 
 
 def server():

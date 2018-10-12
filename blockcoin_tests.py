@@ -17,12 +17,11 @@ def airdrop_tx():
 
 
 def test_blocks():
-    bank = Bank(id=0)
-    bank_private_key = identities.bank_private_key(bank.id)
+    bank = Bank(id=0, private_key=identities.bank_private_key(0))
 
     # Good block
     block = Block(height=0, timestamp=time.time(), txns=[])
-    block.sign(bank_private_key)
+    block.sign(bank.private_key)
     bank.handle_block(block)
     assert len(bank.blocks) == 1
 
@@ -30,7 +29,7 @@ def test_blocks():
     block = Block(height=0, timestamp=time.time(), txns=[])
 
     # FIXME: this should just be private_key_for_bank(bank)
-    block.sign(bank_private_key)
+    block.sign(bank.private_key)
     with pytest.raises(AssertionError):
         bank.handle_block(block)
 
@@ -44,7 +43,7 @@ def test_blocks():
 
 
 def test_airdrop():
-    bank = Bank(id=0)
+    bank = Bank(id=0, private_key=identities.bank_private_key(0))
     tx = airdrop_tx()
     bank.airdrop(tx)
 
@@ -53,7 +52,7 @@ def test_airdrop():
 
 
 def test_utxo():
-    bank = Bank(id=0)
+    bank = Bank(id=0, private_key=identities.bank_private_key(0))
     tx = airdrop_tx()
     bank.airdrop(tx)
     assert len(bank.blocks) == 1
@@ -66,8 +65,12 @@ def test_utxo():
         amount=10
     )
     block = Block(height=1, timestamp=time.time(), txns=[tx])
-    block.sign(identities.bank_private_key(0))
+    block.sign(bank.private_key)
     bank.handle_block(block)
 
     assert 500_000 - 10 == bank.fetch_balance(identities.alice_public_key)
     assert 500_000 + 10 == bank.fetch_balance(identities.bob_public_key)
+
+
+def test_mempool():
+    pass
