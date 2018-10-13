@@ -6,7 +6,6 @@ Usage:
   blockcoin.py ping [--node <node>]
   blockcoin.py tx <from> <to> <amount> [--node <node>]
   blockcoin.py balance <name> [--node <node>]
-  blockcoin.py block <height> [--node <node>]
 
 Options:
   -h --help      Show this screen.
@@ -20,7 +19,7 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import lookup_key, bank_private_key, bank_public_key, airdrop_tx
+from identities import user_private_key, user_public_key, bank_private_key, bank_public_key, airdrop_tx
 
 
 NUM_BANKS = 3
@@ -294,14 +293,12 @@ def server():
     server.serve_forever()
 
 def send_message(address, command, data, response=False):
-    # FIXME: add "address" parameter
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect(address)
         s.sendall(serialize(message))
         if response:
-            _data = s.recv(1024*4)
-            return deserialize(_data)
+            return deserialize(s.recv(5000))
 
 def main(args):
     if args["server"]:
@@ -320,33 +317,30 @@ def main(args):
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
-        name = args["<name>"]
-        private_key = lookup_key(name)
-        public_key = private_key.get_verifying_key()
+        public_key = user_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         print(response["data"])
     elif args["tx"]:
-        # construct transaction
-        sender_private_key = lookup_key(args["<from>"])
+        # Grab parameters
+        sender_private_key = user_private_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
-
-        recipient_private_key = lookup_key(args["<to>"])
+        recipient_private_key = user_private_key(args["<to>"])
         recipient_public_key = recipient_private_key.get_verifying_key()
-
         amount = int(args["<amount>"])
-
         address = external_address(args["--node"])
 
+        # Fetch utxos available to spend
         response = send_message(address, "utxo", sender_public_key, response=True)
         utxo = response["data"]
 
+        # Prepare transaction
         tx = send_value(utxo, sender_private_key, recipient_public_key, amount)
 
         # send to bank
         send_message(address, "tx", tx)
     else:
-        print("Invalid commands")
+        print("Invalid command")
 
 
 if __name__ == '__main__':
