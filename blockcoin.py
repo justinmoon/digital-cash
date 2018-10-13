@@ -3,16 +3,17 @@ BlockCoin
 
 Usage:
   blockcoin.py server
-  blockcoin.py ping
-  blockcoin.py tx <from> <to> <amount>
-  blockcoin.py balance <name>
-  blockcoin.py block <height>
+  blockcoin.py ping [--node <node>]
+  blockcoin.py tx <from> <to> <amount> [--node <node>]
+  blockcoin.py balance <name> [--node <node>]
+  blockcoin.py block <height> [--node <node>]
 
 Options:
-  -h --help     Show this screen.
+  -h --help      Show this screen.
+  --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time
+import uuid, socketserver, socket, sys, argparse, time, os, logging
 
 from docopt import docopt
 from copy import deepcopy
@@ -24,6 +25,10 @@ from identities import lookup_key, bank_private_key, bank_public_key
 
 NUM_BANKS = 3
 
+logging.basicConfig(
+    level=getattr(logging, os.environ.get('LOG_LEVEL', 'INFO')),
+    format='%(asctime)-15s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 class Tx:
 
@@ -245,6 +250,12 @@ class TCPHandler(socketserver.BaseRequestHandler):
         response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
 
+    # def propogate(self, command, data):
+        # """Send a message to all other banks. Good for Tx propogation."""
+        # for peer_id in range(NUM_BANKS):
+            # if peer_id != bank.id:
+                # connect(command, data, get_address(peer_id))
+
     def handle(self):
         message_bytes = self.request.recv(1024*4).strip()
         message = deserialize(message_bytes)
@@ -267,25 +278,35 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="balance-response", data=balance)
 
 
-HOST, PORT = 'localhost', 9002
-# FIXME: os.environ["NODE_ID"]
-bank = Bank(id=0, private_key=bank_private_key(0))
+PORT = 10000
+bank = Bank(
+    id=os.environ["BANK_ID"], 
+    private_key=bank_private_key(0)
+)
 
+
+def network_address_for_bank(bank):
+    hostname = f"node{bank.id}"
+    return (hostname, PORT)
+
+def address_from_host(host):
+    return (host, PORT)
 
 def server():
-    server = socketserver.TCPServer((HOST, PORT), TCPHandler)
+    server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
-def connect(command, data):
+def send_message(address, command, data):
+    # FIXME: add "address" parameter
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
+        s.connect(address)
         s.sendall(serialize(message))
-        _data = s.recv(1024*4)
-        data = deserialize(_data)
+        # _data = s.recv(1024*4)
+        # data = deserialize(_data)
 
-    print('Received', data)
-    return data
+    # print('Received', data)
+    # return data
 
 
 def main(args):
@@ -294,12 +315,15 @@ def main(args):
         bank.issue(1000, alice_public_key)
         server()
     elif args["ping"]:
-        connect("ping", "")
+        address = address_from_host(args["--node"])
+        print(address)
+        send_message(address, "ping", "")
     elif args["balance"]:
         name = args["<name>"]
         private_key = lookup_key(name)
         public_key = private_key.get_verifying_key()
-        connect("balance", public_key)
+        address = address_from_host(args["--node"])
+        connect(address, "balance", public_key)
     elif args["tx"]:
         sender_private_key = lookup_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
@@ -322,7 +346,8 @@ def main(args):
         tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
         for i in range(len(tx.tx_ins)):
             tx.sign_input(i, sender_public_key)
-        connect("tx", tx)
+        address = address_from_host(args["--node"])
+        connect(address, "tx", tx)
     else:
         print("Invalid commands")
 
