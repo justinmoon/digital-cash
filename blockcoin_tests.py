@@ -3,19 +3,6 @@ import identities
 from blockcoin import *
 
 
-def airdrop_tx():
-    id = str(uuid.uuid4()), 
-    tx = Tx(
-        id=id, 
-        tx_ins=[], 
-        tx_outs=[
-            TxOut(tx_id=id, index=0, amount=500_000, public_key=identities.bob_public_key), 
-            TxOut(tx_id=id, index=1, amount=500_000, public_key=identities.alice_public_key),
-        ],
-    )
-    return tx
-
-
 def test_blocks():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
 
@@ -44,7 +31,7 @@ def test_blocks():
 
 def test_airdrop():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
-    tx = airdrop_tx()
+    tx = identities.airdrop_tx()
     bank.airdrop(tx)
 
     assert 500_000 == bank.fetch_balance(identities.alice_public_key)
@@ -53,7 +40,7 @@ def test_airdrop():
 
 def test_utxo():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
-    tx = airdrop_tx()
+    tx = identities.airdrop_tx()
     bank.airdrop(tx)
     assert len(bank.blocks) == 1
 
@@ -65,7 +52,7 @@ def test_utxo():
         amount=10
     )
     block = Block(height=1, timestamp=time.time(), txns=[tx])
-    block.sign(bank.private_key)
+    block.sign(identities.bank_private_key(1))
     bank.handle_block(block)
 
     assert 500_000 - 10 == bank.fetch_balance(identities.alice_public_key)

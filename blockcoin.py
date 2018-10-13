@@ -20,7 +20,7 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import lookup_key, bank_private_key, bank_public_key
+from identities import lookup_key, bank_private_key, bank_public_key, airdrop_tx
 
 
 NUM_BANKS = 3
@@ -89,12 +89,15 @@ class Block:
 class Bank:
 
     def __init__(self, id, private_key):
-        self.next_id = 0
         self.id = id
         self.blocks = []
         self.utxo = {}
         self.mempool = []
         self.private_key = private_key
+
+    @property
+    def next_id(self):
+        return len(self.blocks) % NUM_BANKS
 
     def update_utxo(self, tx):
         for tx_out in tx.tx_outs:
@@ -157,7 +160,7 @@ class Bank:
 
     def make_block(self):
         # Reset mempool
-        txns = deepcopy(self.mempool)  # FIXME???
+        txns = self.mempool
         self.mempool = []
         block = Block(
             height=len(self.blocks),
@@ -172,6 +175,8 @@ class Bank:
         self.mempool.append(tx)
 
     def handle_block(self, block):
+        logging.info((block.height, len(self.blocks)))
+        logging.info([block.height for block in self.blocks])
         assert block.height == len(self.blocks)
 
         # Genesis block has no signature
@@ -189,7 +194,6 @@ class Bank:
         
         # Add the block and increment the id of bank who will report next block
         self.blocks.append(block)
-        self.next_id = (self.next_id + 1) % NUM_BANKS
 
     def airdrop(self, tx):
         """Special logic to execute an airdrop transaction"""
@@ -247,16 +251,22 @@ def cron():
     peer_hostnames = {p for p in os.environ.get('PEERS', '').split(',') if p}
 
     def ping_peers():
+        logger.info(len(bank.blocks))
         if bank.id == bank.next_id:
+            block = bank.make_block()
+            # Add it to our list
+            bank.handle_block(block)
+            # Tell peers
             for hostname in peer_hostnames:
                 address = (hostname, 10000)
-                send_message(address, "ping", "")
+                send_message(address, "block", block)
+
+
         # TODO make a helper to advance next_id
-        bank.next_id = (bank.next_id + 1) % 3
-        threading.Timer(1, ping_peers, []).start()
+        threading.Timer(5, ping_peers, []).start()
 
     # New blocks every 10 seconds
-    threading.Timer(1, ping_peers, []).start()
+    threading.Timer(5, ping_peers, []).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
@@ -281,6 +291,9 @@ class TCPHandler(socketserver.BaseRequestHandler):
         if command == "ping":
             self.respond(command="pong", data="")
 
+        if command == "block":
+            bank.handle_block(data)
+
         if command == "tx":
             try:
                 # FIXME: this method no longer exists. Logic needs complete reboot.
@@ -295,11 +308,12 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
 
 PORT = 10000
+_bank_id = int(os.environ["BANK_ID"])
 bank = Bank(
-    id=int(os.environ["BANK_ID"]),
-    private_key=bank_private_key(0)
+    id=_bank_id,
+    private_key=bank_private_key(_bank_id)
 )
-
+bank.airdrop(airdrop_tx())
 
 def network_address_for_bank(bank):
     hostname = f"node{bank.id}"

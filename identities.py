@@ -23,3 +23,19 @@ def bank_public_key(id):
     """Returns public key of a block producer given their ID"""
     private_key = bank_private_key(id)
     return private_key.get_verifying_key()
+
+
+def airdrop_tx():
+    import uuid
+    from blockcoin import TxOut, Tx
+    id = str(uuid.uuid4()), 
+    tx = Tx(
+        id=id, 
+        tx_ins=[], 
+        tx_outs=[
+            TxOut(tx_id=id, index=0, amount=500_000, public_key=bob_public_key), 
+            TxOut(tx_id=id, index=1, amount=500_000, public_key=alice_public_key),
+        ],
+    )
+    return tx
+
