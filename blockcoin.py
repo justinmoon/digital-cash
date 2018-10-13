@@ -13,7 +13,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading
 
 from docopt import docopt
 from copy import deepcopy
@@ -243,6 +243,20 @@ def prepare_message(command, data):
         "data": data,
     }
 
+def cron():
+    peer_hostnames = {p for p in os.environ.get('PEERS', '').split(',') if p}
+
+    def ping_peers():
+        if bank.id == bank.next_id:
+            for hostname in peer_hostnames:
+                address = (hostname, 10000)
+                send_message(address, "ping", "")
+        # TODO make a helper to advance next_id
+        bank.next_id = (bank.next_id + 1) % 3
+        threading.Timer(1, ping_peers, []).start()
+
+    # New blocks every 10 seconds
+    threading.Timer(1, ping_peers, []).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
@@ -262,6 +276,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
         command = message["command"]
         data = message["data"]
 
+        logger.info(f"received {command}")
+
         if command == "ping":
             self.respond(command="pong", data="")
 
@@ -280,7 +296,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
 PORT = 10000
 bank = Bank(
-    id=os.environ["BANK_ID"], 
+    id=int(os.environ["BANK_ID"]),
     private_key=bank_private_key(0)
 )
 
@@ -293,6 +309,7 @@ def address_from_host(host):
     return (host, PORT)
 
 def server():
+    cron()
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
