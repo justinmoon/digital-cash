@@ -24,6 +24,7 @@ from identities import lookup_key, bank_private_key, bank_public_key, airdrop_tx
 
 
 NUM_BANKS = 3
+BLOCK_TIME = 5   # in seconds
 PORT = 10000
 bank = None
 
@@ -40,7 +41,7 @@ class Tx:
         self.tx_outs = tx_outs
 
     def sign_input(self, index, private_key):
-        signature = private_key.sign(self.tx_ins[index].spend_message)
+        signature = private_key.sign(self.tx_ins[index].message)
         self.tx_ins[index].signature = signature
 
 class TxIn:
@@ -51,7 +52,7 @@ class TxIn:
         self.signature = signature
 
     @property
-    def spend_message(self):
+    def message(self):
         # FIXME: we need something about the recipient here ...
         return f"{self.tx_id}:{self.index}".encode()
 
@@ -81,11 +82,9 @@ class Block:
 
     @property
     def message(self):
-        # FIXME improve variable name
         return serialize([self.height, self.timestamp, self.txns])
 
     def sign(self, private_key):
-        # message just omits the signature
         self.signature = private_key.sign(self.message)
 
 class Bank:
@@ -102,15 +101,31 @@ class Bank:
     def next_id(self):
         return len(self.blocks) % NUM_BANKS
 
-    def update_utxo(self, tx):
-        for tx_out in tx.tx_outs:
-            self.utxo[tx_out.outpoint] = tx_out
-        for tx_in in tx.tx_ins:
-            del self.utxo[tx_in.outpoint]
+    @property
+    def our_turn(self):
+        return self.id == self.next_id
 
     @property
     def mempool_outpoints(self):
         return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
+
+    def fetch_utxo(self, public_key):
+        return [utxo for utxo in self.utxo.values() 
+                if utxo.public_key.to_string() == public_key.to_string()]
+
+    def update_utxo(self, tx):
+        # Remove utxos that were just spent
+        for tx_in in tx.tx_ins:
+            del self.utxo[tx_in.outpoint]
+        # Save utxos which were just created
+        for tx_out in tx.tx_outs:
+            self.utxo[tx_out.outpoint] = tx_out
+
+    def fetch_balance(self, public_key):
+        # Fetch utxo associated with this public key
+        unspents = self.fetch_utxo(public_key)
+        # Sum the amounts
+        return sum([tx_out.amount for tx_out in unspents])
 
     def validate_tx(self, tx):
         in_sum = 0
@@ -125,7 +140,7 @@ class Bank:
             tx_out = self.utxo[tx_in.outpoint]
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
-            public_key.verify(tx_in.signature, tx_in.spend_message)
+            public_key.verify(tx_in.signature, tx_in.message)
 
             # Sum up the total inputs
             amount = tx_out.amount
@@ -137,33 +152,6 @@ class Bank:
 
         # Check no value created or destroyed
         assert in_sum == out_sum
-
-    def fetch_utxo(self, public_key):
-        return [utxo for utxo in self.utxo.values() 
-                if utxo.public_key.to_string() == public_key.to_string()]
-
-    def fetch_balance(self, public_key):
-        # Fetch utxo associated with this public key
-        unspents = self.fetch_utxo(public_key)
-        # Sum the amounts
-        return sum([tx_out.amount for tx_out in unspents])
-
-    def schedule_next_block(self):
-        # submit a block `Constants.block_interval` seconds
-        # handle_block calls this if it is our turn
-        pass
-
-    def make_block(self):
-        # Reset mempool
-        txns = deepcopy(self.mempool)
-        self.mempool = []
-        block = Block(
-            height=len(self.blocks),
-            timestamp=time.time(),
-            txns=txns
-        )
-        block.sign(self.private_key)
-        return block
 
     def handle_tx(self, tx):
         self.validate_tx(tx)
@@ -188,11 +176,37 @@ class Bank:
         # Add the block and increment the id of bank who will report next block
         self.blocks.append(block)
 
+        # Schedule submisison of next block
+        self.schedule_next_block()
+
+    def make_block(self):
+        # Reset mempool
+        txns = deepcopy(self.mempool)
+        self.mempool = []
+        block = Block(
+            height=len(self.blocks),
+            timestamp=time.time(),
+            txns=txns
+        )
+        block.sign(self.private_key)
+        return block
+
+    def submit_block(self):
+        # Make the block
+        block = self.make_block()
+
+        # Add it to our list
+        self.handle_block(block)
+
+        # Submit to peers
+        for address in self.peer_addresses:
+            send_message(address, "block", block)
+
+    def schedule_next_block(self):
+        if self.our_turn:
+            threading.Timer(5, self.submit_block, []).start()
+
     def airdrop(self, tx):
-        """Special logic to execute an airdrop transaction"""
-
-        # TODO do we really need separate method?
-
         assert len(self.blocks) == 0
 
         # Update utxos
@@ -201,7 +215,6 @@ class Bank:
         # Update blockchain
         block = Block(height=0, timestamp=time.time(), signature=None, txns=[tx])
         self.blocks.append(block)
-
 
 def send_value(utxo, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -240,23 +253,6 @@ def prepare_message(command, data):
         "data": data,
     }
 
-def cron():
-
-    def submit_block():
-        if bank.id == bank.next_id:
-            block = bank.make_block()
-            # Add it to our list
-            bank.handle_block(block)
-            # Tell peers
-            for address in bank.peer_addresses:
-                send_message(address, "block", block)
-
-        # New blocks every 10 seconds (recursive)
-        threading.Timer(5, submit_block, []).start()
-
-    # First block in 10 seconds
-    threading.Timer(5, submit_block, []).start()
-
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def respond(self, command, data):
@@ -288,17 +284,12 @@ class TCPHandler(socketserver.BaseRequestHandler):
             utxo = bank.fetch_utxo(data)
             self.respond(command="utxo-response", data=utxo)
 
-def network_address_for_bank(bank):
-    hostname = f"node{bank.id}"
-    return (hostname, PORT)
-
-def address_from_node(node):
+def external_address(node):
     i = int(node[-1])
     port = PORT + i
     return ('localhost', port)
 
 def server():
-    cron()
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
@@ -320,7 +311,10 @@ def main(args):
             id=bank_id,
             private_key=bank_private_key(bank_id)
         )
+        # Airdrop starting balances
         bank.airdrop(airdrop_tx())
+        # Start producing blocks
+        bank.schedule_next_block()
         server()
     elif args["ping"]:
         address = address_from_host(args["--node"])
@@ -329,7 +323,7 @@ def main(args):
         name = args["<name>"]
         private_key = lookup_key(name)
         public_key = private_key.get_verifying_key()
-        address = address_from_node(args["--node"])
+        address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         print(response["data"])
     elif args["tx"]:
@@ -342,7 +336,7 @@ def main(args):
 
         amount = int(args["<amount>"])
 
-        address = address_from_node(args["--node"])
+        address = external_address(args["--node"])
 
         response = send_message(address, "utxo", sender_public_key, response=True)
         utxo = response["data"]
