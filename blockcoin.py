@@ -195,10 +195,10 @@ class Bank:
         # Make the block
         block = self.make_block()
 
-        # Add it to our list
+        # Save locally
         self.handle_block(block)
 
-        # Submit to peers
+        # Tell peers
         for address in self.peer_addresses:
             send_message(address, "block", block)
 
