@@ -91,7 +91,7 @@ class Bank:
     def __init__(self, id, private_key):
         self.id = id
         self.blocks = []
-        self.utxo = {}
+        self.utxo_set = {}
         self.mempool = []
         self.private_key = private_key
         self.peer_addresses = {(p, PORT) for p in os.environ.get('PEERS', '').split(',') if p}
@@ -108,21 +108,21 @@ class Bank:
     def mempool_outpoints(self):
         return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
 
-    def fetch_utxo(self, public_key):
-        return [utxo for utxo in self.utxo.values() 
-                if utxo.public_key.to_string() == public_key.to_string()]
+    def fetch_utxos(self, public_key):
+        return [tx_out for tx_out in self.utxo_set.values() 
+                if tx_out.public_key.to_string() == public_key.to_string()]
 
-    def update_utxo(self, tx):
+    def update_utxo_set(self, tx):
         # Remove utxos that were just spent
         for tx_in in tx.tx_ins:
-            del self.utxo[tx_in.outpoint]
+            del self.utxo_set[tx_in.outpoint]
         # Save utxos which were just created
         for tx_out in tx.tx_outs:
-            self.utxo[tx_out.outpoint] = tx_out
+            self.utxo_set[tx_out.outpoint] = tx_out
 
     def fetch_balance(self, public_key):
-        # Fetch utxo associated with this public key
-        unspents = self.fetch_utxo(public_key)
+        # Fetch utxos associated with this public key
+        unspents = self.fetch_utxos(public_key)
         # Sum the amounts
         return sum([tx_out.amount for tx_out in unspents])
 
@@ -131,12 +131,12 @@ class Bank:
         out_sum = 0
         for tx_in in tx.tx_ins:
             # TxIn spending an unspent output
-            assert tx_in.outpoint in self.utxo
+            assert tx_in.outpoint in self.utxo_set
 
             # No pending transactions spending this same output
             assert tx_in.outpoint not in self.mempool_outpoints
 
-            tx_out = self.utxo[tx_in.outpoint]
+            tx_out = self.utxo_set[tx_in.outpoint]
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
             public_key.verify(tx_in.signature, tx_in.message)
@@ -168,9 +168,9 @@ class Bank:
         for tx in block.txns:
             self.validate_tx(tx)
 
-        # If they're all good, update self.blocks and self.utxo
+        # If they're all good, update self.blocks and self.utxo_set
         for tx in block.txns:
-            self.update_utxo(tx)
+            self.update_utxo_set(tx)
         
         # Add the block and increment the id of bank who will report next block
         self.blocks.append(block)
@@ -208,20 +208,20 @@ class Bank:
     def airdrop(self, tx):
         assert len(self.blocks) == 0
 
-        # Update utxos
-        self.update_utxo(tx)
+        # Update utxo set
+        self.update_utxo_set(tx)
 
         # Update blockchain
         block = Block(height=0, timestamp=time.time(), signature=None, txns=[tx])
         self.blocks.append(block)
 
-def prepare_simple_tx(utxo, sender_private_key, recipient_public_key, amount):
+def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
 
     # Construct tx.tx_outs
     tx_ins = []
     tx_in_sum = 0
-    for tx_out in utxo:
+    for tx_out in utxos:
         tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
         tx_in_sum += tx_out.amount
         if tx_in_sum > amount:
@@ -279,9 +279,9 @@ class TCPHandler(socketserver.BaseRequestHandler):
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
-        if command == "utxo":
-            utxo = bank.fetch_utxo(data)
-            self.respond(command="utxo-response", data=utxo)
+        if command == "utxos":
+            utxos = bank.fetch_utxos(data)
+            self.respond(command="utxos-response", data=utxos)
 
 def external_address(node):
     i = int(node[-1])
@@ -331,11 +331,11 @@ def main(args):
         address = external_address(args["--node"])
 
         # Fetch utxos available to spend
-        response = send_message(address, "utxo", sender_public_key, response=True)
-        utxo = response["data"]
+        response = send_message(address, "utxos", sender_public_key, response=True)
+        utxos = response["data"]
 
         # Prepare transaction
-        tx = prepare_simple_tx(utxo, sender_private_key, recipient_public_key, amount)
+        tx = prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
         # send to bank
         send_message(address, "tx", tx)
