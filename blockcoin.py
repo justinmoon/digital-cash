@@ -215,7 +215,7 @@ class Bank:
         block = Block(height=0, timestamp=time.time(), signature=None, txns=[tx])
         self.blocks.append(block)
 
-def send_value(utxo, sender_private_key, recipient_public_key, amount):
+def prepare_simple_tx(utxo, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
 
     # Construct tx.tx_outs
@@ -335,7 +335,7 @@ def main(args):
         utxo = response["data"]
 
         # Prepare transaction
-        tx = send_value(utxo, sender_private_key, recipient_public_key, amount)
+        tx = prepare_simple_tx(utxo, sender_private_key, recipient_public_key, amount)
 
         # send to bank
         send_message(address, "tx", tx)
