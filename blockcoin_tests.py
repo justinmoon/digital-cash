@@ -7,27 +7,19 @@ def test_blocks():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
 
     # Good block
-    block = Block(height=0, timestamp=time.time(), txns=[])
+    block = Block(timestamp=time.time(), txns=[])
     block.sign(bank.private_key)
     bank.handle_block(block)
     assert len(bank.blocks) == 1
 
-    # Block with bad height
-    block = Block(height=0, timestamp=time.time(), txns=[])
-
-    # FIXME: this should just be private_key_for_bank(bank)
-    block.sign(bank.private_key)
-    with pytest.raises(AssertionError):
-        bank.handle_block(block)
-
-    # Block with bad signature
-    block = Block(height=1, timestamp=time.time(), txns=[])
-    # Wrong block producer signs
+    # Wrong bank signs
+    block = Block(timestamp=time.time(), txns=[])
     wrong_private_key = identities.bank_private_key(1000) 
     block.sign(wrong_private_key)
     with pytest.raises(ecdsa.keys.BadSignatureError):
         bank.handle_block(block)
 
+    # Block with bad tx
 
 def test_airdrop():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
@@ -45,13 +37,13 @@ def test_utxo():
     assert len(bank.blocks) == 1
 
     # Alice sends 10 to Bob
-    tx = send_value(
-        bank=bank,
+    tx = prepare_simple_tx(
+        utxos=bank.fetch_utxos(identities.alice_public_key),
         sender_private_key=identities.alice_private_key,
         recipient_public_key=identities.bob_public_key,
         amount=10
     )
-    block = Block(height=1, timestamp=time.time(), txns=[tx])
+    block = Block(timestamp=time.time(), txns=[tx])
     block.sign(identities.bank_private_key(1))
     bank.handle_block(block)
 

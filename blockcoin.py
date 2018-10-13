@@ -73,15 +73,14 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, height, timestamp, txns, signature=None):
-        self.height = height
+    def __init__(self, timestamp, txns, signature=None):
         self.timestamp = timestamp
         self.signature = signature
         self.txns = txns
 
     @property
     def message(self):
-        return serialize([self.height, self.timestamp, self.txns])
+        return serialize([self.timestamp, self.txns])
 
     def sign(self, private_key):
         self.signature = private_key.sign(self.message)
@@ -157,10 +156,8 @@ class Bank:
         self.mempool.append(tx)
 
     def handle_block(self, block):
-        assert block.height == len(self.blocks)
-
         # Genesis block has no signature
-        if block.height > 0:
+        if len(self.blocks) > 0:
             public_key = bank_public_key(self.next_id)
             public_key.verify(block.signature, block.message)
 
@@ -183,7 +180,6 @@ class Bank:
         txns = deepcopy(self.mempool)
         self.mempool = []
         block = Block(
-            height=len(self.blocks),
             timestamp=time.time(),
             txns=txns
         )
@@ -212,7 +208,7 @@ class Bank:
         self.update_utxo_set(tx)
 
         # Update blockchain
-        block = Block(height=0, timestamp=time.time(), signature=None, txns=[tx])
+        block = Block(timestamp=time.time(), signature=None, txns=[tx])
         self.blocks.append(block)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
