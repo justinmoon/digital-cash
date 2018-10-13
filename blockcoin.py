@@ -32,6 +32,11 @@ logging.basicConfig(
     format='%(asctime)-15s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def spend_message(tx, index):
+    outpoint = tx.tx_ins[index].outpoint
+    return serialize(outpoint) + serialize(tx.tx_outs)
+
 class Tx:
 
     def __init__(self, id, tx_ins, tx_outs):
@@ -40,7 +45,8 @@ class Tx:
         self.tx_outs = tx_outs
 
     def sign_input(self, index, private_key):
-        signature = private_key.sign(self.tx_ins[index].message)
+        message = spend_message(self, index)
+        signature = private_key.sign(message)
         self.tx_ins[index].signature = signature
 
 class TxIn:
@@ -49,11 +55,6 @@ class TxIn:
         self.tx_id = tx_id
         self.index = index
         self.signature = signature
-
-    @property
-    def message(self):
-        # FIXME: we need something about the recipient here ...
-        return f"{self.tx_id}:{self.index}".encode()
 
     @property
     def outpoint(self):
@@ -140,7 +141,10 @@ class Bank:
             tx_out = self.utxo_set[tx_in.outpoint]
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
-            public_key.verify(tx_in.signature, tx_in.message)
+            # FIXME: passing this index is cumbersome
+            index = tx.tx_ins.index(tx_in)
+            message = spend_message(tx, index)
+            public_key.verify(tx_in.signature, message)
 
             # Sum up the total inputs
             amount = tx_out.amount
