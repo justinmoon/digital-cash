@@ -35,7 +35,7 @@ def test_valid_transfers():
     assert bank.fetch_coins(alice_public_key) == []
     assert bank.fetch_coins(bob_public_key) == [coin]
 
-    # Bob sends to Bank
+    # Bob sends to Alice
     coin.transfer(
         owner_private_key=bob_private_key,
         recipient_public_key=alice_public_key,
