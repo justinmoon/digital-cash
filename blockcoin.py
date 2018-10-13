@@ -73,7 +73,9 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, timestamp, txns, signature=None):
+    def __init__(self, txns, timestamp=None, signature=None):
+        if timestamp == None:
+            timestamp = time.time()
         self.timestamp = timestamp
         self.signature = signature
         self.txns = txns
@@ -179,10 +181,7 @@ class Bank:
         # Reset mempool
         txns = deepcopy(self.mempool)
         self.mempool = []
-        block = Block(
-            timestamp=time.time(),
-            txns=txns
-        )
+        block = Block(txns=txns)
         block.sign(self.private_key)
         return block
 
@@ -208,7 +207,7 @@ class Bank:
         self.update_utxo_set(tx)
 
         # Update blockchain
-        block = Block(timestamp=time.time(), signature=None, txns=[tx])
+        block = Block(txns=[tx])
         self.blocks.append(block)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
