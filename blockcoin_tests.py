@@ -7,13 +7,13 @@ def test_blocks():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
 
     # Good block
-    block = Block(timestamp=time.time(), txns=[])
+    block = Block(txns=[])
     block.sign(bank.private_key)
     bank.handle_block(block)
     assert len(bank.blocks) == 1
 
     # Wrong bank signs
-    block = Block(timestamp=time.time(), txns=[])
+    block = Block(txns=[])
     wrong_private_key = identities.bank_private_key(1000) 
     block.sign(wrong_private_key)
     with pytest.raises(ecdsa.keys.BadSignatureError):
@@ -43,7 +43,7 @@ def test_utxo():
         recipient_public_key=identities.bob_public_key,
         amount=10
     )
-    block = Block(timestamp=time.time(), txns=[tx])
+    block = Block(txns=[tx])
     block.sign(identities.bank_private_key(1))
     bank.handle_block(block)
 
