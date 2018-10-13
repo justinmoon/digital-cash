@@ -24,6 +24,8 @@ from identities import lookup_key, bank_private_key, bank_public_key, airdrop_tx
 
 
 NUM_BANKS = 3
+PORT = 10000
+bank = None
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get('LOG_LEVEL', 'INFO')),
@@ -94,6 +96,7 @@ class Bank:
         self.utxo = {}
         self.mempool = []
         self.private_key = private_key
+        self.peer_addresses = {(p, PORT) for p in os.environ.get('PEERS', '').split(',') if p}
 
     @property
     def next_id(self):
@@ -105,19 +108,9 @@ class Bank:
         for tx_in in tx.tx_ins:
             del self.utxo[tx_in.outpoint]
 
-    def issue(self, amount, public_key):
-        id_ = str(uuid.uuid4())
-        tx_ins = []
-        tx_outs = [TxOut(tx_id=id_, index=0, amount=amount, public_key=public_key)]
-        tx = Tx(id=id_, tx_ins=tx_ins, tx_outs=tx_outs)
-
-        self.update_utxo(tx)
-
-        return tx
-
     @property
     def mempool_outpoints(self):
-        return [tx_in.outpoint for tx in self.mempool for tx_in in tx]
+        return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
 
     def validate_tx(self, tx):
         in_sum = 0
@@ -139,8 +132,10 @@ class Bank:
             in_sum += amount
 
         for tx_out in tx.tx_outs:
+            # Sum up the total outpouts
             out_sum += tx_out.amount
 
+        # Check no value created or destroyed
         assert in_sum == out_sum
 
     def fetch_utxo(self, public_key):
@@ -160,7 +155,7 @@ class Bank:
 
     def make_block(self):
         # Reset mempool
-        txns = self.mempool
+        txns = deepcopy(self.mempool)
         self.mempool = []
         block = Block(
             height=len(self.blocks),
@@ -175,8 +170,6 @@ class Bank:
         self.mempool.append(tx)
 
     def handle_block(self, block):
-        logging.info((block.height, len(self.blocks)))
-        logging.info([block.height for block in self.blocks])
         assert block.height == len(self.blocks)
 
         # Genesis block has no signature
@@ -197,6 +190,9 @@ class Bank:
 
     def airdrop(self, tx):
         """Special logic to execute an airdrop transaction"""
+
+        # TODO do we really need separate method?
+
         assert len(self.blocks) == 0
 
         # Update utxos
@@ -207,17 +203,13 @@ class Bank:
         self.blocks.append(block)
 
 
-def send_value(bank, sender_private_key, recipient_public_key, amount):
-    # Fetch utxos
+def send_value(utxo, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
-    utxo = bank.fetch_utxo(sender_public_key)
-    utxo_sorted = sorted(utxo, key=lambda tx_out: tx_out.amount)
-    utxo_sum = sum([u.amount for u in utxo])
 
     # Construct tx.tx_outs
     tx_ins = []
     tx_in_sum = 0
-    for tx_out in utxo_sorted:
+    for tx_out in utxo:
         tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
         tx_in_sum += tx_out.amount
         if tx_in_sum > amount:
@@ -238,6 +230,7 @@ def send_value(bank, sender_private_key, recipient_public_key, amount):
     tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
     for i in range(len(tx.tx_ins)):
         tx.sign_input(i, sender_private_key)
+
     return tx
 
 
@@ -248,37 +241,27 @@ def prepare_message(command, data):
     }
 
 def cron():
-    peer_hostnames = {p for p in os.environ.get('PEERS', '').split(',') if p}
 
-    def ping_peers():
-        logger.info(len(bank.blocks))
+    def submit_block():
         if bank.id == bank.next_id:
             block = bank.make_block()
             # Add it to our list
             bank.handle_block(block)
             # Tell peers
-            for hostname in peer_hostnames:
-                address = (hostname, 10000)
+            for address in bank.peer_addresses:
                 send_message(address, "block", block)
 
+        # New blocks every 10 seconds (recursive)
+        threading.Timer(5, submit_block, []).start()
 
-        # TODO make a helper to advance next_id
-        threading.Timer(5, ping_peers, []).start()
-
-    # New blocks every 10 seconds
-    threading.Timer(5, ping_peers, []).start()
+    # First block in 10 seconds
+    threading.Timer(5, submit_block, []).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def respond(self, command, data):
         response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
-
-    # def propogate(self, command, data):
-        # """Send a message to all other banks. Good for Tx propogation."""
-        # for peer_id in range(NUM_BANKS):
-            # if peer_id != bank.id:
-                # connect(command, data, get_address(peer_id))
 
     def handle(self):
         message_bytes = self.request.recv(1024*4).strip()
@@ -295,90 +278,79 @@ class TCPHandler(socketserver.BaseRequestHandler):
             bank.handle_block(data)
 
         if command == "tx":
-            try:
-                # FIXME: this method no longer exists. Logic needs complete reboot.
-                bank.handle_tx(data)
-                self.respond(command="tx-response", data="accepted")
-            except:
-                self.respond(command="tx-response", data="rejected")
+            bank.handle_tx(data)
 
         if command == "balance":
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
-
-PORT = 10000
-_bank_id = int(os.environ["BANK_ID"])
-bank = Bank(
-    id=_bank_id,
-    private_key=bank_private_key(_bank_id)
-)
-bank.airdrop(airdrop_tx())
+        if command == "utxo":
+            utxo = bank.fetch_utxo(data)
+            self.respond(command="utxo-response", data=utxo)
 
 def network_address_for_bank(bank):
     hostname = f"node{bank.id}"
     return (hostname, PORT)
 
-def address_from_host(host):
-    return (host, PORT)
+def address_from_node(node):
+    i = int(node[-1])
+    port = PORT + i
+    return ('localhost', port)
 
 def server():
     cron()
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
-def send_message(address, command, data):
+def send_message(address, command, data, response=False):
     # FIXME: add "address" parameter
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect(address)
         s.sendall(serialize(message))
-        # _data = s.recv(1024*4)
-        # data = deserialize(_data)
-
-    # print('Received', data)
-    # return data
-
+        if response:
+            _data = s.recv(1024*4)
+            return deserialize(_data)
 
 def main(args):
     if args["server"]:
-        from identities import alice_public_key
-        bank.issue(1000, alice_public_key)
+        global bank
+        bank_id = int(os.environ["BANK_ID"])
+        bank = Bank(
+            id=bank_id,
+            private_key=bank_private_key(bank_id)
+        )
+        bank.airdrop(airdrop_tx())
         server()
     elif args["ping"]:
         address = address_from_host(args["--node"])
-        print(address)
         send_message(address, "ping", "")
     elif args["balance"]:
         name = args["<name>"]
         private_key = lookup_key(name)
         public_key = private_key.get_verifying_key()
-        address = address_from_host(args["--node"])
-        connect(address, "balance", public_key)
+        address = address_from_node(args["--node"])
+        response = send_message(address, "balance", public_key, response=True)
+        print(response["data"])
     elif args["tx"]:
+        # construct transaction
         sender_private_key = lookup_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
+
         recipient_private_key = lookup_key(args["<to>"])
         recipient_public_key = recipient_private_key.get_verifying_key()
+
         amount = int(args["<amount>"])
 
-        utxo = bank.fetch_utxo(sender_public_key)
-        utxo_sum = sum([u.amount for u in utxo])
+        address = address_from_node(args["--node"])
 
-        tx_ins = [
-            TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None)
-            for tx_out in utxo
-        ]
-        tx_id = uuid.uuid4()
-        tx_outs = [
-            TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
-            TxOut(tx_id=tx_id, index=1, amount=utxo_sum-amount, public_key=sender_public_key),
-        ]
-        tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
-        for i in range(len(tx.tx_ins)):
-            tx.sign_input(i, sender_public_key)
-        address = address_from_host(args["--node"])
-        connect(address, "tx", tx)
+        response = send_message(address, "utxo", sender_public_key, response=True)
+        utxo = response["data"]
+
+        tx = send_value(utxo, sender_private_key, recipient_public_key, amount)
+
+        # send to bank
+        send_message(address, "tx", tx)
     else:
         print("Invalid commands")
 
