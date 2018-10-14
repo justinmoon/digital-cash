@@ -2,25 +2,28 @@ version: "3"
 
 services:
 
-  node1:
+  node0:
     build: .
     image: server
     ports:
-        - "10000:9999"
+        - "10000:10000"
     environment:
-      PEERS: 'node2,node3'
+      PEERS: 'node1,node2'
+      ID: 0
+
+  node1:
+    image: server
+    ports:
+        - "10001:10000"
+    environment:
+      PEERS: 'node0,node2'
+      ID: 1
 
   node2:
     image: server
     ports:
-        - "10001:9999"
+        - "10002:10000"
     environment:
-      PEERS: 'node1,node3'
-
-  node3:
-    image: server
-    ports:
-        - "10002:9999"
-    environment:
-      PEERS: 'node1,node2'
+      PEERS: 'node0,node1'
+      ID: 2
 

@@ -1,6 +1,6 @@
 FROM python:3.7.0
 ADD requirements.txt ./
 RUN pip install -r requirements.txt
-ADD server.py ./
+ADD ping_pong_docker.py ./
 
-CMD ["python", "server.py"]
+CMD ["python", "ping_pong_docker.py", "serve"]
