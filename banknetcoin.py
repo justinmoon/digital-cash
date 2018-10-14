@@ -141,7 +141,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
         return self.request.sendall(serialize(response))
 
     def handle(self):
-        message_bytes = self.request.recv(1024*4).strip()
+        message_bytes = self.request.recv(1000).strip()
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
