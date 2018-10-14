@@ -112,7 +112,7 @@ class Bank:
 
     def fetch_utxos(self, public_key):
         return [tx_out for tx_out in self.utxo_set.values() 
-                if tx_out.public_key.to_string() == public_key.to_string()]
+                if tx_out.public_key == public_key]
 
     def update_utxo_set(self, tx):
         # Remove utxos that were just spent
