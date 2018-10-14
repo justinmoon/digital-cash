@@ -18,7 +18,14 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import lookup_key
+from identities import user_public_key, user_private_key
+
+
+
+def spend_message(tx, index):
+    outpoint = tx.tx_ins[index].outpoint
+    return serialize(outpoint) + serialize(tx.tx_outs)
+
 
 class Tx:
 
@@ -28,8 +35,14 @@ class Tx:
         self.tx_outs = tx_outs
 
     def sign_input(self, index, private_key):
-        signature = private_key.sign(self.tx_ins[index].spend_message)
+        message = spend_message(self, index)
+        signature = private_key.sign(message)
         self.tx_ins[index].signature = signature
+
+    def verify_input(self, index, public_key):
+        tx_in = self.tx_ins[index]
+        message = spend_message(self, index)
+        return public_key.verify(tx_in.signature, message)
 
 class TxIn:
 
@@ -83,13 +96,16 @@ class Bank:
     def validate_tx(self, tx):
         in_sum = 0
         out_sum = 0
-        for tx_in in tx.tx_ins:
+        for index, tx_in in enumerate(tx.tx_ins):
+            # TxIn spending unspent output
             assert tx_in.outpoint in self.utxo
 
+            # Grab the tx_out
             tx_out = self.utxo[tx_in.outpoint]
+
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
-            public_key.verify(tx_in.signature, tx_in.spend_message)
+            tx.verify_input(index, public_key)
 
             # Sum up the total inputs
             amount = tx_out.amount
@@ -159,10 +175,6 @@ def server():
     server.serve_forever()
 
 
-def send_value():
-    pass
-
-
 def connect(command, data):
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -184,14 +196,12 @@ def main(args):
         connect("ping", "")
     elif args["balance"]:
         name = args["<name>"]
-        private_key = lookup_key(name)
-        public_key = private_key.get_verifying_key()
+        public_key = user_public_key(name)
         connect("balance", public_key)
     elif args["tx"]:
-        sender_private_key = lookup_key(args["<from>"])
+        sender_private_key = user_private_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
-        recipient_private_key = lookup_key(args["<to>"])
-        recipient_public_key = recipient_private_key.get_verifying_key()
+        recipient_public_key = user_public_key(args["<to>"])
         amount = int(args["<amount>"])
 
         utxo = bank.fetch_utxo(sender_public_key)
