@@ -15,14 +15,20 @@ def ping(hostname):
         data = s.recv(1024*4)
         logger.info(f'Received {str(data)} from "{hostname}"')
 
+
+def extract_hostname(server):
+    address = self.client_address[0]
+    host_info = socket.gethostbyaddr()
+    pattern = r"_(.*?)_"
+    return re.search(pattern, host_info[0]).group(1)
+
+
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         message_bytes = self.request.recv(1024*4).strip()
-        host_info = socket.gethostbyaddr(self.client_address[0])
-        pattern = r"_(.*?)_"
-        host = re.search(pattern, host_info[0]).group(1)
-        logger.info(f'Received {str(message_bytes)} from "{host}"')
+        hostname = extract_hostname(self)
+        logger.info(f'Received {str(message_bytes)} from "{hostname}"')
         self.request.sendall(b"pong")
         logger.info(f'Sent b"pong" to "{host}"')
 
