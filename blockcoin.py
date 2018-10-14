@@ -50,6 +50,11 @@ class Tx:
         signature = private_key.sign(message)
         self.tx_ins[index].signature = signature
 
+    def verify_input(self, index, public_key):
+        tx_in = self.tx_ins[index]
+        message = spend_message(self, index)
+        return public_key.verify(tx_in.signature, message)
+
 class TxIn:
 
     def __init__(self, tx_id, index, signature=None):
@@ -132,20 +137,19 @@ class Bank:
     def validate_tx(self, tx):
         in_sum = 0
         out_sum = 0
-        for tx_in in tx.tx_ins:
+        for index, tx_in in enumerate(tx.tx_ins):
             # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo_set
 
             # No pending transactions spending this same output
             assert tx_in.outpoint not in self.mempool_outpoints
 
+            # Grab the tx_out
             tx_out = self.utxo_set[tx_in.outpoint]
+
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
-            # FIXME: passing this index is cumbersome
-            index = tx.tx_ins.index(tx_in)
-            message = spend_message(tx, index)
-            public_key.verify(tx_in.signature, message)
+            tx.verify_input(index, public_key)
 
             # Sum up the total inputs
             amount = tx_out.amount
