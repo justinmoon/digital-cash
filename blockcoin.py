@@ -2,7 +2,7 @@
 BlockCoin
 
 Usage:
-  blockcoin.py server
+  blockcoin.py serve
   blockcoin.py ping [--node <node>]
   blockcoin.py tx <from> <to> <amount> [--node <node>]
   blockcoin.py balance <name> [--node <node>]
@@ -130,9 +130,9 @@ class Bank:
 
     def fetch_balance(self, public_key):
         # Fetch utxos associated with this public key
-        unspents = self.fetch_utxos(public_key)
+        utxos = self.fetch_utxos(public_key)
         # Sum the amounts
-        return sum([tx_out.amount for tx_out in unspents])
+        return sum([tx_out.amount for tx_out in utxos])
 
     def validate_tx(self, tx):
         in_sum = 0
@@ -292,7 +292,7 @@ def external_address(node):
     port = PORT + i
     return ('localhost', port)
 
-def server():
+def serve():
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
@@ -305,7 +305,7 @@ def send_message(address, command, data, response=False):
             return deserialize(s.recv(5000))
 
 def main(args):
-    if args["server"]:
+    if args["serve"]:
         global bank
         bank_id = int(os.environ["BANK_ID"])
         bank = Bank(
@@ -316,7 +316,7 @@ def main(args):
         bank.airdrop(airdrop_tx())
         # Start producing blocks
         bank.schedule_next_block()
-        server()
+        serve()
     elif args["ping"]:
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
