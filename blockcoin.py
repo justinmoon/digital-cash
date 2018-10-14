@@ -28,8 +28,9 @@ PORT = 10000
 bank = None
 
 logging.basicConfig(
-    level=getattr(logging, os.environ.get('LOG_LEVEL', 'INFO')),
-    format='%(asctime)-15s %(levelname)s %(message)s')
+    level="INFO",
+    format='%(asctime)-15s %(levelname)s %(message)s',
+)
 logger = logging.getLogger(__name__)
 
 
