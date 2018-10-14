@@ -52,11 +52,6 @@ class TxIn:
         self.signature = signature
 
     @property
-    def spend_message(self):
-        # FIXME: we need something about the recipient here ...
-        return f"{self.tx_id}:{self.index}".encode()
-
-    @property
     def outpoint(self):
         return (self.tx_id, self.index)
 
