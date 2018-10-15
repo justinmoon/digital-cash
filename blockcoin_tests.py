@@ -19,7 +19,7 @@ def test_blocks():
     with pytest.raises(ecdsa.keys.BadSignatureError):
         bank.handle_block(block)
 
-    # Block with bad tx
+    # TODO Block with bad tx
 
 def test_airdrop():
     bank = Bank(id=0, private_key=identities.bank_private_key(0))
