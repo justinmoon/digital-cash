@@ -4,6 +4,9 @@ host = "0.0.0.0"
 port = 10000
 address = (host, port)
 
+class MyTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
@@ -15,7 +18,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             print(f'Sent b"pong"')
 
 def serve():
-    server = socketserver.TCPServer(address, TCPHandler)
+    server = MyTCPServer(address, TCPHandler)
     server.serve_forever()
 
 def ping():
