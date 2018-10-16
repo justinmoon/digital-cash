@@ -5,4 +5,4 @@ ADD blockcoin.py ./
 ADD utils.py ./
 ADD identities.py ./
 
-CMD ["python", "blockcoin.py", "server"]
+CMD ["python", "blockcoin.py", "serve"]
