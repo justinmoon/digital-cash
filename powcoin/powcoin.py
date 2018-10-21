@@ -80,19 +80,15 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, txns, timestamp=None, signature=None):
+    def __init__(self, txns, timestamp=None):
         if timestamp == None:
             timestamp = time.time()
         self.timestamp = timestamp
-        self.signature = signature
         self.txns = txns
 
     @property
     def message(self):
         return serialize([self.timestamp, self.txns])
-
-    def sign(self, private_key):
-        self.signature = private_key.sign(self.message)
 
 class BlockChain(list):
 
