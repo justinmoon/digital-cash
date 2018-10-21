@@ -19,13 +19,13 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import user_private_key, user_public_key, bank_private_key, bank_public_key, airdrop_tx
+from identities import user_private_key, user_public_key
 
 
 NUM_BANKS = 3
 BLOCK_TIME = 5   # in seconds
 PORT = 10000
-bank = None
+node = None
 
 logging.basicConfig(
     level="INFO",
@@ -103,7 +103,7 @@ class BlockChain(list):
     def work(self):
         pass # TODO
 
-class Bank:
+class Node:
 
     def __init__(self, id, private_key):
         self.id = id
@@ -178,11 +178,6 @@ class Bank:
         self.mempool.append(tx)
 
     def handle_block(self, block):
-        # Genesis block has no signature
-        if len(self.blocks) > 0:
-            public_key = bank_public_key(self.next_id)
-            public_key.verify(block.signature, block.message)
-
         # Check the transactions are valid
         for tx in block.txns:
             self.validate_tx(tx)
@@ -191,11 +186,8 @@ class Bank:
         for tx in block.txns:
             self.update_utxo_set(tx)
         
-        # Add the block and increment the id of bank who will report next block
+        # Save the block
         self.blocks.append(block)
-
-        # Schedule submisison of next block
-        self.schedule_next_block()
 
     def make_block(self):
         # Reset mempool
@@ -285,17 +277,17 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "block":
-            bank.handle_block(data)
+            node.handle_block(data)
 
         if command == "tx":
-            bank.handle_tx(data)
+            node.handle_tx(data)
 
         if command == "balance":
-            balance = bank.fetch_balance(data)
+            balance = node.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
         if command == "utxos":
-            utxos = bank.fetch_utxos(data)
+            utxos = node.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
 def external_address(node):
@@ -317,16 +309,8 @@ def send_message(address, command, data, response=False):
 
 def main(args):
     if args["serve"]:
-        global bank
-        bank_id = int(os.environ["BANK_ID"])
-        bank = Bank(
-            id=bank_id,
-            private_key=bank_private_key(bank_id)
-        )
-        # Airdrop starting balances
-        bank.airdrop(airdrop_tx())
-        # Start producing blocks
-        bank.schedule_next_block()
+        global node
+        node = Node()
         serve()
     elif args["ping"]:
         address = address_from_host(args["--node"])
@@ -352,7 +336,7 @@ def main(args):
         # Prepare transaction
         tx = prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
-        # send to bank
+        # send to node
         send_message(address, "tx", tx)
     else:
         print("Invalid command")
