@@ -65,7 +65,8 @@ def mine_forever():
         # This is False if mining was interrupted
         # Perhaps an exception would be wiser ...
         if mined_block:
-            chain.append(mined_block)
+            with chain_lock:
+                chain.append(mined_block)
 
 
 def chain_is_valid():
