@@ -150,6 +150,14 @@ def total_work(chain):
     # FIXME
     return len(chain)
 
+def tx_in_to_utxo(txin, chain):
+    tx_id, tx_out_index = txin.outpoint
+
+    for tx, block, height in txn_iterator(chain):
+        if tx.id == txid:
+            tx_out = tx.tx_outs[tx_out_index]
+            return UnspentTxOut(tx_id=tx_in.tx_id, index=tx_in.index,
+                   amount=tx_out.amount, public_key=tx_out.public_key)
 
 class Node:
 
@@ -180,21 +188,17 @@ class Node:
             del self.utxo_set[tx_in.outpoint]
         # Save utxos which were just created
         for index, tx_out in enumerate(tx.tx_outs):
-            utxo = UnspentTxOut(tx_id=tx.id, index=index, amount=tx_out.amount, 
-                                public_key=tx_out.public_key)
+            utxo = UnspentTxOut(tx_id=tx.id, index=index, 
+                amount=tx_out.amount, public_key=tx_out.public_key)
             self.utxo_set[utxo.outpoint] = utxo
 
     def rollback_utxo_set(self, tx):
-        # tx.tx_ins become utxo
+        # tx.tx_ins put back in self.utxo_set
         for tx_in in tx.tx_ins:
-            for tx, block, height in txn_iterator(self.active_chain):
-                if tx.id == tx_in.id:
-                    tx_out = tx.tx_outs[tx_in.index]
-                    utxo = UnspentTxOut(tx_id=tx.id, index=tx_in.index, 
-                            amount=tx_out.amount, public_key=tx_out.public_key)
-                    self.utxo_set[utxo.outpoint] = utxo
+            utxo = tx_in_to_utxo(tx_in, self.active_chain)
+            self.utxo_set[utxo.outpoint] = utxo
 
-        # tx.tx_outs removed from utxo
+        # tx.tx_outs removed from utxo_set
         for index in len(tx.tx_outs):
             outpoint = (tx.id, index)
             del self.utxo_set[outpoint]
