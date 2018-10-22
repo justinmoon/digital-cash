@@ -137,14 +137,14 @@ def txn_iterator(chain):
 
 def get_fork_index(chain_one, chain_two):
     """Last height where both chains share a block"""
-    min_len = min(
-        len(chain_one),
-        len(chain_two),
+    min_height = min(
+        len(chain_one) - 1,
+        len(chain_two) - 1,
     )
-    for i in range(min_len):
+    for i in range(min_height):
         if chain_one[i].id != chain_two[i].id:
-            return i - 1
-    return min_len
+            return i
+    return min_height
 
 def total_work(chain):
     # FIXME
@@ -249,12 +249,21 @@ class Node:
             self.validate_tx(tx)
         self.mempool.append(tx)
 
-    def chain_index_for_block(self, block):
-        for index, chain in enumerate(self.chains):
-            if chain[-1].id == block.prev_id:
-                return index
-        # FIXME: do something if we can't connect
-        raise NotImplementedError("We need to attempt to download more blocks")
+    def find_block(self, block):
+        # FIXME: HACK check the active_chain manually
+        if self.active_chain[-1].id == block.prev_id:
+            height = len(self.active_chain) - 1
+            is_tip = height == len(self.active_chain) - 1
+            return self.active_chain_index, height, is_tip
+
+        # longest chains first
+        sorted_chains = sorted(self.chains, key=lambda c: len(c), reverse=True)
+        for chain_index, chain in enumerate(sorted_chains):
+            for height, _block in enumerate(chain):
+                if _block.id == block.prev_id:
+                    is_tip = height == len(chain) - 1
+                    chain_index = self.chains.index(chain)
+                    return chain_index, height, is_tip
 
     def handle_block(self, block):
         # TODO:
@@ -270,21 +279,46 @@ class Node:
 
         # FIXME from this point onwards should probably be a different function
         # Save the block to relevant chain
-        chain_index = self.chain_index_for_block(block)
+
+        initial_work = total_work(self.active_chain)
+        # FIXME: inefficient
+        active_chain = deepcopy(self.active_chain)
+
+        # # TEMP
+        # if len(self.chains) > 1 and len(self.chains[1]) == 4):
+            # import pdb; pdb.set_trace()
+
+        # If this is a new fork, we need to create a new entry in .chains
+        chain_index, height, is_tip = self.find_block(block)
+        print(chain_index, height, is_tip)
+        if not is_tip:
+            # +1 b/c we want to include the block at that height
+            base_chain = self.chains[chain_index][:height+1]  
+            self.chains.append(base_chain)
+            chain_index = len(self.chains) - 1
+            print(f"CREATED FORK (index={chain_index})")
+
         chain = self.chains[chain_index]
         chain.append(block)
         initial_active_chain_index = self.active_chain_index
 
+        print(f"ACTIVE BRANCH: {initial_active_chain_index}")
+
         # FIXME
-        its_the_tip = total_work(chain) > total_work(self.active_chain) \
+        new_tip = total_work(chain) > initial_work \
                       or initial_active_chain_index == chain_index
 
         # If this chain is or will be the tip
-        if its_the_tip:
+        # print(f"is it the tip?: {its_the_tip}")
+        if new_tip:
+            print(f"ACTIVE BRANCH CHANGE: {initial_active_chain_index} -> {chain_index}")
             # Gather rollbacks & updates to be made
             # FIXME find a better word than "update"
-            fork_height = get_fork_index(chain, self.active_chain)
-            blocks_to_rollback = self.active_chain[fork_height+1:]
+
+            fork_height = get_fork_index(chain, active_chain)
+            # print(f"fork height: {fork_height}")
+            blocks_to_rollback = active_chain[fork_height+1:]
+            # print(f"blocks to update: {blocks_to_rollback}")
             blocks_to_update = chain[fork_height+1:]
             add_to_mempool = []
             remove_from_mempool = []
@@ -367,7 +401,6 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
             break
 
     # Make sure sender can afford it
-    print(tx_in_sum, amount)
     assert tx_in_sum >= amount
 
     # Construct tx.tx_outs
@@ -408,7 +441,7 @@ def mine_block(block):
     while int(mining_hash(block.header(nonce)), 16) >= target:
         nonce += 1
     block.nonce = nonce
-    print(f"Nonce found {block}")
+    # print(f"Nonce found {block}")
     return block
 
 
