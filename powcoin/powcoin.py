@@ -25,6 +25,7 @@ bits = 21
 target = 1 << (256 - bits)
 
 
+BLOCK_SUBSIDY = 50
 NUM_BANKS = 3
 BLOCK_TIME = 5   # in seconds
 PORT = 10000
@@ -44,6 +45,7 @@ def spend_message(tx, index):
 class Tx:
 
     def __init__(self, id, tx_ins, tx_outs):
+        # FIXME: generate this by hashing the tx
         self.id = id
         self.tx_ins = tx_ins
         self.tx_outs = tx_outs
@@ -57,6 +59,10 @@ class Tx:
         tx_in = self.tx_ins[index]
         message = spend_message(self, index)
         return public_key.verify(tx_in.signature, message)
+
+    @property
+    def id(self):
+        return mining_hash(serialize(self))
 
 class TxIn:
 
@@ -249,6 +255,16 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 ##########
 # Mining #
 ##########
+
+
+def prepare_coinbase(self, public_key):
+    return Tx(
+        tx_ins=[],
+        tx_outs=[
+            TxOut(index=0, amount=BLOCK_SUBSIDY, public_key=public_key), 
+        ],
+    )
+
 
 def mining_hash(s):
     if not isinstance(s, bytes):
