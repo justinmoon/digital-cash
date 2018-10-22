@@ -12,7 +12,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib
 
 from docopt import docopt
 from copy import deepcopy
@@ -20,6 +20,9 @@ from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
 from identities import user_private_key, user_public_key
+
+bits = 21
+target = 1 << (256 - bits)
 
 
 NUM_BANKS = 3
@@ -80,44 +83,52 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, txns, timestamp=None):
+    def __init__(self, txns, prev_id, timestamp=None, nonce=None):
         if timestamp == None:
             timestamp = time.time()
-        self.timestamp = timestamp
         self.txns = txns
+        self.prev_id = prev_id
+        self.timestamp = timestamp
+        self.nonce = nonce
 
     @property
-    def message(self):
-        return serialize([self.timestamp, self.txns])
+    def id(self):
+        return mining_hash(self.header(self.nonce))
 
-class BlockChain(list):
+    def header(self, nonce):
+        return serialize([self.timestamp, self.txns, nonce])
 
-    def __init__(self, blocks):
-        self.blocks = blocks
+    def __repr__(self):
+        return f"Block(prev_id={self.prev_id}, id={self.id})"
+
+class Chain(list):
+
+    # def __init__(self, blocks):
+        # self.blocks = blocks
 
     @property
     def work(self):
-        pass # TODO
+        # FIXME
+        return sum(self)
+
+    @property
+    def tip(self):
+        return self[-1]
 
 class Node:
 
-    def __init__(self, id, private_key):
-        self.id = id
-        self.blocks = []
+    def __init__(self):
+        self.active_chain_index = 0
+        self.chains = []
         self.utxo_set = {}
         self.mempool = []
-        self.private_key = private_key
         # TODO: just call this peers
         # TODO: add some way to handle "pending peers" who are handshaking
         self.peer_addresses = {(p, PORT) for p in os.environ.get('PEERS', '').split(',') if p}
 
     @property
-    def next_id(self):
-        return len(self.blocks) % NUM_BANKS
-
-    @property
-    def our_turn(self):
-        return self.id == self.next_id
+    def active_chain(self):
+        return self.chains[self.active_chain_index]
 
     @property
     def mempool_outpoints(self):
@@ -188,9 +199,9 @@ class Node:
     def make_block(self):
         # Reset mempool
         txns = deepcopy(self.mempool)
+        # FIXME: with powcoin lets allow handle_block manage mempool
         self.mempool = []
         block = Block(txns=txns)
-        block.sign(self.private_key)
         return block
 
     def submit_block(self):
@@ -204,19 +215,6 @@ class Node:
         for address in self.peer_addresses:
             send_message(address, "block", block)
 
-    def schedule_next_block(self):
-        if self.our_turn:
-            threading.Timer(5, self.submit_block, []).start()
-
-    def airdrop(self, tx):
-        assert len(self.blocks) == 0
-
-        # Update utxo set
-        self.update_utxo_set(tx)
-
-        # Update blockchain
-        block = Block(txns=[tx])
-        self.blocks.append(block)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -248,6 +246,51 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 
     return tx
 
+##########
+# Mining #
+##########
+
+def mining_hash(s):
+    if not isinstance(s, bytes):
+        s = s.encode()
+    return hashlib.sha256(s).hexdigest()
+
+
+def mine_block(block):
+    nonce = 0
+    # FIXME: make this line more readable
+    while int(mining_hash(block.header(nonce)), 16) >= target:
+        nonce += 1
+    block.nonce = nonce
+    print(f"Nonce found {block}")
+    return block
+
+
+def mine_forever():
+    while True:
+        unmined_block = Block(
+            txns=[],
+            prev_id=node.active_chain[-1].id,
+        )
+        mined_block = mine_block(unmined_block)
+        
+        # This is False if mining was interrupted
+        # Perhaps an exception would be wiser ...
+        if mined_block:
+            node.active_chain.append(mined_block)
+
+
+# def chain_is_valid():
+    # current_block = chain[0]
+    # for block in chain[1:]:
+        # assert block.prev_id == current_block.id
+        # assert int(block.id, 16) < target
+        # current_block = block
+
+
+##############
+# Networking #
+##############
 
 def prepare_message(command, data):
     return {
@@ -303,11 +346,22 @@ def send_message(address, command, data, response=False):
         if response:
             return deserialize(s.recv(5000))
 
+
+
 def main(args):
     if args["serve"]:
         global node
         node = Node()
-        serve()
+        # FIXME: needs coinbase
+        genesis_block = Block(
+            txns=[],
+            prev_id=None,
+            nonce=0,
+        )
+        node.chains.append([genesis_block])
+        node.active_chain_index = 0
+        # serve()  # FIXME
+        mine_forever()
     elif args["ping"]:
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
