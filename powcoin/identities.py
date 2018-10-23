@@ -25,3 +25,14 @@ def key_to_name(key):
 def user_public_key(name):
     private_key = user_private_key(name)
     return private_key.get_verifying_key()
+
+def node_private_key(id):
+    assert isinstance(id, int)
+    assert id >= 0
+    base = 1000  # So bank keys don't collide with user keys ...
+    return SigningKey.from_secret_exponent(base + id, curve=SECP256k1)
+
+def node_public_key(id):
+    """Returns public key of a block producer given their ID"""
+    private_key = node_private_key(id)
+    return private_key.get_verifying_key()
