@@ -192,7 +192,7 @@ class Node:
     def mempool_tx_ids(self):
         return [tx.id for tx in self.mempool]
 
-    def update_utxo_set(self, tx):
+    def add_tx_to_utxo_set(self, tx):
         # Remove utxos that were just spent
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
@@ -203,7 +203,7 @@ class Node:
                 amount=tx_out.amount, public_key=tx_out.public_key)
             self.utxo_set[utxo.outpoint] = utxo
 
-    def rollback_utxo_set(self, tx):
+    def remove_tx_from_utxo_set(self, tx):
         # tx.tx_ins put back in self.utxo_set
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
@@ -281,15 +281,65 @@ class Node:
                     chain_index = self.chains.index(chain)
                     return chain, chain_index, height, is_tip
 
-    def rollback_utxo(self, block):
-        pass
+    def sync_utxo_set(self, chain, active_chain):
+        print(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
 
-    def sync_utxo_set(self, block):
-        pass
+        rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
+
+        print(f"Rolling back: {rollback_blocks}")
+        print(f"Syncing: {sync_blocks}")
+
+        # Rollback every transaction in current active_chain but not in the new one
+        # No exception handling here b/c failure would mean program is broken
+        rollback_txns = []
+        for block in rollback_blocks[::-1]:
+            for tx in block.txns:
+                self.remove_tx_from_utxo_set(tx)
+                rollback_txns.append(tx)
+        
+        
+        # Attempt to update the UTXO set
+        sync_txns = []
+        for block in sync_blocks:
+            for index, tx in enumerate(block.txns):
+                try:
+                    if index == 0:
+                        self.validate_coinbase(tx)
+                    else:
+                        self.validate_tx(tx)
+                    self.add_tx_to_utxo_set(tx)
+                    sync_txns.append(tx)
+                except Exception as e:
+                    # Block is invalid. Revert the entire operation.
+
+                    # Reverse the rollbacks
+                    for tx in rollback_txns:
+                        self.add_tx_to_utxo_set(tx)
+
+                    # Rollback the syncs
+                    for tx in sync_txns:
+                        self.remove_tx_from_utxo_set(tx)
+
+                    # Remove this and future blocks from this chain
+                    chain = chain[:chain.index(block)]
+                    return
+
+        # Add rolled-back transactions to the mempool
+        for tx in rollback_txns:
+            if tx.id not in self.mempool_tx_ids:
+                self.mempool.append(tx)
+
+        # Remove freshly synced transactions from mempool
+        for tx in sync_txns:
+            if tx.id in self.mempool_tx_ids:
+                self.mempool.remove(tx)
+        
+        # If everything worked update the "active chain"
+        self.active_chain_index = self.chains.index(chain)
 
     def validate_block(self, block):
         # Check POW
-        assert int(mining_hash(block.id), 16) >= target, "Insufficient Proof-of-Work"
+        assert int(block.id, 16) < target, "Insufficient Proof-of-Work"
 
 
     def chain_diffs(self, from_chain, to_chain):
@@ -311,6 +361,7 @@ class Node:
         # Validate the block
         self.validate_block(block)
 
+        # YOLO
         active_chain = deepcopy(self.active_chain)  # FIXME
 
         # If this is a new fork, we need to create a new chain
@@ -323,61 +374,7 @@ class Node:
 
         # Resync the UTXO database if the "work record" was broken
         if total_work(chain) > total_work(active_chain):
-            print(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {chain_index}")
-
-            rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
-
-            print(f"Rolling back: {rollback_blocks}")
-            print(f"Syncing: {sync_blocks}")
-
-            # Rollback every transaction in current active_chain but not in the new one
-            # No exception handling here b/c failure would mean program is broken
-            rollback_txns = []
-            for block in rollback_blocks[::-1]:
-                for tx in block.txns:
-                    self.rollback_utxo_set(tx)
-                    rollback_txns.append(tx)
-            
-            
-            # Attempt to update the UTXO set
-            # Rollback if there are any problems
-            sync_txns = []
-            for block in sync_blocks:
-                for index, tx in enumerate(block.txns):
-                    try:
-                        if index == 0:
-                            self.validate_coinbase(tx)
-                        else:
-                            self.validate_tx(tx)
-                        self.update_utxo_set(tx)
-                        sync_txns.append(tx)
-                    except Exception as e:
-                        # Block is invalid. Revert the entire operation.
-
-                        # Reverse the rollbacks
-                        for tx in rollback_txns:
-                            self.update_utxo_set(tx)
-
-                        # Rollback the syncs
-                        for tx in sync_txns:
-                            self.rollback_utxo_set(tx)
-
-                        # Remove this and future blocks from this chain
-                        chain = chain[:chain.index(block)]
-                        return
-
-            # Add rolled-back transactions to the mempool
-            for tx in rollback_txns:
-                if tx.id not in self.mempool_tx_ids:
-                    self.mempool.append(tx)
-
-            # Remove freshly synced transactions from mempool
-            for tx in sync_txns:
-                if tx.id in self.mempool_tx_ids:
-                    self.mempool.append(tx)
-            
-            # If everything worked update the "active chain"
-            self.active_chain_index = chain_index
+            self.sync_utxo_set(chain, active_chain)
 
     def make_block(self):
         # Reset mempool
