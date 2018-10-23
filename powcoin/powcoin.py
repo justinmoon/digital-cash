@@ -284,15 +284,13 @@ class Node:
     def rollback_utxo(self, block):
         pass
 
-    def sync_utxo(self, block):
+    def sync_utxo_set(self, block):
         pass
 
     def validate_block(self, block):
         # Check POW
+        assert int(mining_hash(block.id), 16) >= target, "Insufficient Proof-of-Work"
 
-        # If we're extending the main chain, validate the transactions
-
-        pass
 
     def chain_diffs(self, from_chain, to_chain):
         fork_height = get_last_shared_block(from_chain, to_chain)
@@ -310,19 +308,10 @@ class Node:
         return new_chain, new_chain_index
 
     def handle_block(self, block):
-
         # Validate the block
+        self.validate_block(block)
 
-        # Create a new chain if needed
-
-        # Save the block
-
-        # Sync utxo -- condition here is if the hash of the tip changed?
-        # * we need to get the diff between the old and new main chain
-
-        # Set active_chain_index
-
-        active_chain = deepcopy(self.active_chain)  # FIXME: inefficient
+        active_chain = deepcopy(self.active_chain)  # FIXME
 
         # If this is a new fork, we need to create a new chain
         chain, chain_index, height, is_tip = self.find_block(block)
@@ -340,54 +329,50 @@ class Node:
 
             print(f"Rolling back: {rollback_blocks}")
             print(f"Syncing: {sync_blocks}")
-            add_to_mempool = []
-            remove_from_mempool = []
 
             # Rollback every transaction in current active_chain but not in the new one
             # No exception handling here b/c failure would mean program is broken
+            rollback_txns = []
             for block in rollback_blocks[::-1]:
                 for tx in block.txns:
                     self.rollback_utxo_set(tx)
-                    add_to_mempool.append(tx)
+                    rollback_txns.append(tx)
             
             
             # Attempt to update the UTXO set
             # Rollback if there are any problems
-            updated_txns = []
+            sync_txns = []
             for block in sync_blocks:
                 for index, tx in enumerate(block.txns):
-                    print("updateing tx", tx)
                     try:
-                        # Check the other transactions are valid
                         if index == 0:
                             self.validate_coinbase(tx)
                         else:
                             self.validate_tx(tx)
                         self.update_utxo_set(tx)
-                        updated_txns.append(tx)
-                        remove_from_mempool.append(tx)
+                        sync_txns.append(tx)
                     except Exception as e:
-                        print("PROBLEM ROLLING BACK")
-                        import traceback
-                        print(traceback.format_exc())
-                        # Block is invalid
-                        # Rollback all utxo changes
-                        for tx in updated_txns:
+                        # Block is invalid. Revert the entire operation.
+
+                        # Reverse the rollbacks
+                        for tx in rollback_txns:
+                            self.update_utxo_set(tx)
+
+                        # Rollback the syncs
+                        for tx in sync_txns:
                             self.rollback_utxo_set(tx)
-                        
-                        # re-add "rollback_blocks"
-                        for block in rollback_blocks:
-                            for tx in block.txns:
-                                self.update_utxo_set(tx)
+
+                        # Remove this and future blocks from this chain
+                        chain = chain[:chain.index(block)]
                         return
 
             # Add rolled-back transactions to the mempool
-            for tx in add_to_mempool:
+            for tx in rollback_txns:
                 if tx.id not in self.mempool_tx_ids:
                     self.mempool.append(tx)
 
             # Remove freshly synced transactions from mempool
-            for tx in remove_from_mempool:
+            for tx in sync_txns:
                 if tx.id in self.mempool_tx_ids:
                     self.mempool.append(tx)
             
