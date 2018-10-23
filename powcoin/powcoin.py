@@ -270,7 +270,7 @@ class Node:
         if self.active_chain[-1].id == block.prev_id:
             height = len(self.active_chain) - 1
             is_tip = height == len(self.active_chain) - 1
-            return self.active_chain_index, height, is_tip
+            return self.active_chain, self.active_chain_index, height, is_tip
 
         # longest chains first
         sorted_chains = sorted(self.chains, key=lambda c: len(c), reverse=True)
@@ -279,7 +279,7 @@ class Node:
                 if _block.id == block.prev_id:
                     is_tip = height == len(chain) - 1
                     chain_index = self.chains.index(chain)
-                    return chain_index, height, is_tip
+                    return chain, chain_index, height, is_tip
 
     def rollback_utxo(self, block):
         pass
@@ -298,6 +298,15 @@ class Node:
         # return rollback_blocks, rollforward_blocks
         pass
 
+    def create_branch(self, chain_index, height):
+        # +1 b/c we want to include this block
+        base_chain = self.chains[chain_index][:height+1]  
+        self.chains.append(base_chain)
+        new_chain_index = len(self.chains) - 1
+        print(f"CREATED FORK (index={new_chain_index})")
+        new_chain = self.chains[new_chain_index]
+        return new_chain, new_chain_index
+
     def handle_block(self, block):
 
         # Validate the block
@@ -311,32 +320,18 @@ class Node:
 
         # Set active_chain_index
 
-        initial_work = total_work(self.active_chain)
-        # FIXME: inefficient
-        active_chain = deepcopy(self.active_chain)
+        active_chain = deepcopy(self.active_chain)  # FIXME: inefficient
 
-        # If this is a new fork, we need to create a new entry in .chains
-        chain_index, height, is_tip = self.find_block(block)
+        # If this is a new fork, we need to create a new chain
+        chain, chain_index, height, is_tip = self.find_block(block)
         if not is_tip:
-            # +1 b/c we want to include the block at that height
-            base_chain = self.chains[chain_index][:height+1]  
-            self.chains.append(base_chain)
-            chain_index = len(self.chains) - 1
-            print(f"CREATED FORK (index={chain_index})")
+            chain, chain_index = self.create_branch(chain_index, height)
 
-        chain = self.chains[chain_index]
+        # Add to the chain
         chain.append(block)
-        # initial_active_chain_index = self.active_chain_index
 
-        print(f"ACTIVE BRANCH: {self.active_chain_index}")
-
-        # FIXME
-        will_be_active_chain = total_work(chain) > initial_work \
-        # will_be_active_chain = total_work(chain) > initial_work \
-                      # or initial_active_chain_index == chain_index
-
-        # If this chain is or will be the tip
-        if will_be_active_chain:
+        # Resync the UTXO database if the "work record" was broken
+        if total_work(chain) > total_work(active_chain):
             print(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {chain_index}")
             # Gather rollbacks & updates to be made
             # FIXME find a better word than "update"
