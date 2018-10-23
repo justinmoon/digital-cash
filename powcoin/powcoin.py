@@ -19,9 +19,9 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import user_private_key, user_public_key
+from identities import user_private_key, user_public_key, key_to_name
 
-bits = 17
+bits = 2
 target = 1 << (256 - bits)
 
 
@@ -64,8 +64,17 @@ class Tx:
         return public_key.verify(tx_in.signature, message)
 
     @property
+    def is_coinbase(self):
+        # return self.tx_ins[0].outpoint == (None, None)
+        return isinstance(self.tx_ins[0].signature, int)
+
+    @property
     def id(self):
-        return mining_hash(serialize(self))
+        # FIXME repr
+        return mining_hash(f"tx_ins={self.tx_ins}, tx_outs={self.tx_outs})")
+
+    def __repr__(self):
+        return f"Tx(id={self.id}, tx_ins={self.tx_ins}, tx_outs={self.tx_outs})"
 
 class TxIn:
 
@@ -78,11 +87,18 @@ class TxIn:
     def outpoint(self):
         return (self.tx_id, self.index)
 
+    def __repr__(self):
+        signature = self.signature if isinstance(self.signature, int) else "..."
+        return f"TxIn(tx_id={self.tx_id}, index={self.index} {signature})"
+
 class TxOut:
 
     def __init__(self, amount, public_key):
         self.amount = amount
         self.public_key = public_key
+
+    def __repr__(self):
+        return f"TxOut(amount={self.amount}, public_key={key_to_name(self.public_key)})"
 
 class UnspentTxOut:
 
@@ -98,12 +114,9 @@ class UnspentTxOut:
 
 class Block:
 
-    def __init__(self, txns, prev_id, timestamp=None, nonce=0):
-        if timestamp == None:
-            timestamp = time.time()
+    def __init__(self, txns, prev_id, nonce=0):
         self.txns = txns
         self.prev_id = prev_id
-        self.timestamp = timestamp
         self.nonce = nonce
 
     @property
@@ -111,7 +124,7 @@ class Block:
         return mining_hash(self.header(self.nonce))
 
     def header(self, nonce):
-        return serialize([self.timestamp, self.txns, nonce])
+        return serialize([self.txns, nonce])
 
     def __repr__(self):
         return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
@@ -124,38 +137,35 @@ class Chain(list):
     @property
     def work(self):
         # FIXME
-        return sum(self)
+        return len(self)
 
     @property
     def tip(self):
         return self[-1]
+
+    @property
+    def height(self):
+        return len(self) - 1
 
 def txn_iterator(chain):
     return (
         (txn, block, height)
         for height, block in enumerate(chain) for txn in block.txns)
 
-def get_fork_index(chain_one, chain_two):
-    """Last height where both chains share a block"""
-    min_height = min(
-        len(chain_one) - 1,
-        len(chain_two) - 1,
-    )
-    for i in range(min_height):
-        if chain_one[i].id != chain_two[i].id:
-            return i
-    return min_height
+def last_shared_block(chain_one, chain_two):
+    for height, (b1, b2) in enumerate(zip(chain_one, chain_two)):
+        if b1.id != b2.id:
+            return height - 1
+    return min(len(chain_one), len(chain_two)) - 1
 
 def total_work(chain):
     # FIXME
     return len(chain)
 
-def tx_in_to_utxo(txin, chain):
-    tx_id, tx_out_index = txin.outpoint
-
+def tx_in_to_utxo(tx_in, chain):
     for tx, block, height in txn_iterator(chain):
-        if tx.id == txid:
-            tx_out = tx.tx_outs[tx_out_index]
+        if tx.id == tx_in.tx_id:
+            tx_out = tx.tx_outs[tx_in.index]
             return UnspentTxOut(tx_id=tx_in.tx_id, index=tx_in.index,
                    amount=tx_out.amount, public_key=tx_out.public_key)
 
@@ -184,8 +194,9 @@ class Node:
 
     def update_utxo_set(self, tx):
         # Remove utxos that were just spent
-        for tx_in in tx.tx_ins:
-            del self.utxo_set[tx_in.outpoint]
+        if not tx.is_coinbase:
+            for tx_in in tx.tx_ins:
+                del self.utxo_set[tx_in.outpoint]
         # Save utxos which were just created
         for index, tx_out in enumerate(tx.tx_outs):
             utxo = UnspentTxOut(tx_id=tx.id, index=index, 
@@ -194,12 +205,13 @@ class Node:
 
     def rollback_utxo_set(self, tx):
         # tx.tx_ins put back in self.utxo_set
-        for tx_in in tx.tx_ins:
-            utxo = tx_in_to_utxo(tx_in, self.active_chain)
-            self.utxo_set[utxo.outpoint] = utxo
+        if not tx.is_coinbase:
+            for tx_in in tx.tx_ins:
+                utxo = tx_in_to_utxo(tx_in, self.active_chain)
+                self.utxo_set[utxo.outpoint] = utxo
 
         # tx.tx_outs removed from utxo_set
-        for index in len(tx.tx_outs):
+        for index in range(len(tx.tx_outs)):
             outpoint = (tx.id, index)
             del self.utxo_set[outpoint]
 
@@ -218,7 +230,7 @@ class Node:
         out_sum = 0
         for index, tx_in in enumerate(tx.tx_ins):
             # TxIn spending an unspent output
-            assert tx_in.outpoint in self.utxo_set
+            assert tx_in.outpoint in self.utxo_set, f"{tx_in.outpoint} not in {self.utxo_set}"
 
             # No pending transactions spending this same output
             assert tx_in.outpoint not in self.mempool_outpoints
@@ -242,7 +254,7 @@ class Node:
         assert in_sum == out_sum
 
     def validate_coinbase(self, tx):
-        assert len(tx.tx_ins) == 0
+        assert len(tx.tx_ins) == 1
         assert len(tx.tx_outs) == 1
         assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
 
@@ -277,9 +289,6 @@ class Node:
         # Check coinbase transactions
         self.validate_coinbase(block.txns[0])
 
-        # Check the other transactions are valid
-        for tx in block.txns[1:]:
-            self.validate_tx(tx)
 
         # FIXME from this point onwards should probably be a different function
         # Save the block to relevant chain
@@ -294,7 +303,6 @@ class Node:
 
         # If this is a new fork, we need to create a new entry in .chains
         chain_index, height, is_tip = self.find_block(block)
-        print(chain_index, height, is_tip)
         if not is_tip:
             # +1 b/c we want to include the block at that height
             base_chain = self.chains[chain_index][:height+1]  
@@ -313,23 +321,25 @@ class Node:
                       or initial_active_chain_index == chain_index
 
         # If this chain is or will be the tip
-        # print(f"is it the tip?: {its_the_tip}")
         if new_tip:
             print(f"ACTIVE BRANCH CHANGE: {initial_active_chain_index} -> {chain_index}")
             # Gather rollbacks & updates to be made
             # FIXME find a better word than "update"
 
-            fork_height = get_fork_index(chain, active_chain)
-            # print(f"fork height: {fork_height}")
+            fork_height = last_shared_block(chain, active_chain)
+            print("chain", chain)
+            print("active chain", active_chain)
+            print(f"fork height: {fork_height}")
             blocks_to_rollback = active_chain[fork_height+1:]
-            # print(f"blocks to update: {blocks_to_rollback}")
+            print(f"blocks to rollback: {blocks_to_rollback}")
             blocks_to_update = chain[fork_height+1:]
+            print(f"blocks to update: {blocks_to_update}")
             add_to_mempool = []
             remove_from_mempool = []
 
             # Rollback every transaction in current active_chain but not in the new one
             # No exception handling here b/c failure would mean program is broken
-            for block in blocks_to_rollback:
+            for block in blocks_to_rollback[::-1]:
                 for tx in block.txns:
                     self.rollback_utxo_set(tx)
                     add_to_mempool.append(tx)
@@ -339,12 +349,21 @@ class Node:
             # Rollback if there are any problems
             updated_txns = []
             for block in blocks_to_update:
-                for tx in block.txns:
+                for index, tx in enumerate(block.txns):
+                    print("updateing tx", tx)
                     try:
+                        # Check the other transactions are valid
+                        if index == 0:
+                            self.validate_coinbase(tx)
+                        else:
+                            self.validate_tx(tx)
                         self.update_utxo_set(tx)
                         updated_txns.append(tx)
                         remove_from_mempool.append(tx)
-                    except:
+                    except Exception as e:
+                        print("PROBLEM ROLLING BACK")
+                        import traceback
+                        print(traceback.format_exc())
                         # Block is invalid
                         # Rollback all utxo changes
                         for tx in updated_txns:
@@ -421,9 +440,13 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 
     return tx
 
-def prepare_coinbase(public_key):
+def prepare_coinbase(public_key, height):
     return Tx(
-        tx_ins=[],
+        tx_ins=[
+            # we'll use height as the signature so coinbase hashes
+            # don't collide
+            TxIn(None, None, height)
+        ],
         tx_outs=[
             TxOut(amount=BLOCK_SUBSIDY, public_key=public_key), 
         ],
