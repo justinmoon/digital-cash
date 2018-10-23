@@ -281,25 +281,39 @@ class Node:
                     chain_index = self.chains.index(chain)
                     return chain_index, height, is_tip
 
+    def rollback_utxo(self, block):
+        pass
+
+    def sync_utxo(self, block):
+        pass
+
+    def validate_block(self, block):
+        # Check POW
+
+        # If we're extending the main chain, validate the transactions
+
+        pass
+
+    def chain_diff(self, from_chain, to_chain):
+        # return rollback_blocks, rollforward_blocks
+        pass
+
     def handle_block(self, block):
-        # TODO:
-        # * sync_utxo_set(block) and rollback_utxo_set(block)
 
+        # Validate the block
 
-        # Check coinbase transactions
-        self.validate_coinbase(block.txns[0])
+        # Create a new chain if needed
 
+        # Save the block
 
-        # FIXME from this point onwards should probably be a different function
-        # Save the block to relevant chain
+        # Sync utxo -- condition here is if the hash of the tip changed?
+        # * we need to get the diff between the old and new main chain
+
+        # Set active_chain_index
 
         initial_work = total_work(self.active_chain)
         # FIXME: inefficient
         active_chain = deepcopy(self.active_chain)
-
-        # # TEMP
-        # if len(self.chains) > 1 and len(self.chains[1]) == 4):
-            # import pdb; pdb.set_trace()
 
         # If this is a new fork, we need to create a new entry in .chains
         chain_index, height, is_tip = self.find_block(block)
@@ -312,17 +326,18 @@ class Node:
 
         chain = self.chains[chain_index]
         chain.append(block)
-        initial_active_chain_index = self.active_chain_index
+        # initial_active_chain_index = self.active_chain_index
 
-        print(f"ACTIVE BRANCH: {initial_active_chain_index}")
+        print(f"ACTIVE BRANCH: {self.active_chain_index}")
 
         # FIXME
-        new_tip = total_work(chain) > initial_work \
-                      or initial_active_chain_index == chain_index
+        will_be_active_chain = total_work(chain) > initial_work \
+        # will_be_active_chain = total_work(chain) > initial_work \
+                      # or initial_active_chain_index == chain_index
 
         # If this chain is or will be the tip
-        if new_tip:
-            print(f"ACTIVE BRANCH CHANGE: {initial_active_chain_index} -> {chain_index}")
+        if will_be_active_chain:
+            print(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {chain_index}")
             # Gather rollbacks & updates to be made
             # FIXME find a better word than "update"
 
