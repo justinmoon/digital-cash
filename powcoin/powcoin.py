@@ -152,7 +152,7 @@ def txn_iterator(chain):
         (txn, block, height)
         for height, block in enumerate(chain) for txn in block.txns)
 
-def last_shared_block(chain_one, chain_two):
+def get_last_shared_block(chain_one, chain_two):
     for height, (b1, b2) in enumerate(zip(chain_one, chain_two)):
         if b1.id != b2.id:
             return height - 1
@@ -294,9 +294,11 @@ class Node:
 
         pass
 
-    def chain_diff(self, from_chain, to_chain):
-        # return rollback_blocks, rollforward_blocks
-        pass
+    def chain_diffs(self, from_chain, to_chain):
+        fork_height = get_last_shared_block(from_chain, to_chain)
+        rollback_blocks = from_chain[fork_height+1:]
+        sync_blocks = to_chain[fork_height+1:]
+        return rollback_blocks, sync_blocks
 
     def create_branch(self, chain_index, height):
         # +1 b/c we want to include this block
@@ -333,23 +335,17 @@ class Node:
         # Resync the UTXO database if the "work record" was broken
         if total_work(chain) > total_work(active_chain):
             print(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {chain_index}")
-            # Gather rollbacks & updates to be made
-            # FIXME find a better word than "update"
 
-            fork_height = last_shared_block(chain, active_chain)
-            print("chain", chain)
-            print("active chain", active_chain)
-            print(f"fork height: {fork_height}")
-            blocks_to_rollback = active_chain[fork_height+1:]
-            print(f"blocks to rollback: {blocks_to_rollback}")
-            blocks_to_update = chain[fork_height+1:]
-            print(f"blocks to update: {blocks_to_update}")
+            rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
+
+            print(f"Rolling back: {rollback_blocks}")
+            print(f"Syncing: {sync_blocks}")
             add_to_mempool = []
             remove_from_mempool = []
 
             # Rollback every transaction in current active_chain but not in the new one
             # No exception handling here b/c failure would mean program is broken
-            for block in blocks_to_rollback[::-1]:
+            for block in rollback_blocks[::-1]:
                 for tx in block.txns:
                     self.rollback_utxo_set(tx)
                     add_to_mempool.append(tx)
@@ -358,7 +354,7 @@ class Node:
             # Attempt to update the UTXO set
             # Rollback if there are any problems
             updated_txns = []
-            for block in blocks_to_update:
+            for block in sync_blocks:
                 for index, tx in enumerate(block.txns):
                     print("updateing tx", tx)
                     try:
@@ -379,8 +375,8 @@ class Node:
                         for tx in updated_txns:
                             self.rollback_utxo_set(tx)
                         
-                        # re-add "blocks_to_rollback"
-                        for block in blocks_to_rollback:
+                        # re-add "rollback_blocks"
+                        for block in rollback_blocks:
                             for tx in block.txns:
                                 self.update_utxo_set(tx)
                         return
