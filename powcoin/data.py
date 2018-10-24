@@ -2,15 +2,18 @@ from powcoin import *
 from pprint import pprint
 import identities as ids
 
-node = Node()
-alice_node = Node()
-bob_node = Node()
+node = Node([])
+alice_node = Node([])
+bob_node = Node([])
 
 def send_tx(n, sender_private_key, recipient_public_key, amount):
     utxos = n.fetch_utxos(sender_private_key.get_verifying_key())
     return prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
-# Alice mines the genesis block
+#################################
+# Alice mines the genesis block #
+#################################
+
 genesis_coinbase = prepare_coinbase(public_key=ids.alice_public_key, height=-1)
 unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
 mined_genesis_block = mine_block(unmined_genesis_block)
@@ -24,7 +27,10 @@ for n in [node, alice_node, bob_node]:
 print(mined_genesis_block)
 print()
 
-# Bob mines next block
+########################
+# Bob mines next block #
+########################
+
 print("Bob mines first real block")
 coinbase = prepare_coinbase(ids.bob_public_key, height=1)
 alice_to_bob = send_tx(bob_node, ids.alice_private_key, ids.bob_public_key, 10)
@@ -37,7 +43,10 @@ bob_node.handle_block(first_mined_block)
 print(first_mined_block)
 print()
 
-### Bob and Alice both mine next block. Node discover's Bob's first.
+###################################################################
+# Bob and Alice both mine next block. Node discover's Bob's first #
+###################################################################
+
 # Bob's
 print("Bob's first fork block:")
 coinbase = prepare_coinbase(ids.bob_public_key, height=2)
@@ -51,9 +60,9 @@ print(bob_fork_block)
 print()
 
 # Alice's
-print("Alice's first fork block:")
-coinbase = prepare_coinbase(ids.alice_public_key, height=2)
-bob_to_alice = send_tx(alice_node, ids.bob_private_key, ids.alice_public_key, 10)
+print("Alice's first fork block:") 
+coinbase = prepare_coinbase(ids.alice_public_key, height=2) 
+bob_to_alice = send_tx(alice_node, ids.bob_private_key, ids.alice_public_key, 10) 
 unmined_block = Block(txns=[coinbase, bob_to_alice], 
                       prev_id=first_mined_block.id)
 alice_fork_block = mine_block(unmined_block)
@@ -68,7 +77,10 @@ assert node.active_chain == [
     bob_fork_block,
 ]
 
-### Again, they both mine next block. Node discover's Alice's first.
+###################################################################
+# Again, they both mine next block. Node discover's Alice's first #
+###################################################################
+
 # Alice's
 print("Alice's second fork block:")
 
@@ -108,13 +120,38 @@ expected = [
     alice_fork_block,
     alice_second_fork_block,
 ]
-from pprint import pprint
-print("chains")
-pprint(node.chains)
-print("active chain")
-pprint(node.active_chain)
-print("expected")
-pprint(expected)
+# from pprint import pprint
+# print("chains")
+# pprint(node.chains)
+# print("active chain")
+# pprint(node.active_chain)
+# print("expected")
+# pprint(expected)
 
 assert node.active_chain == expected
+
+#################################
+# Alice attempts a double-spend #
+#################################
+
+# Collect initial data
+alice_starting_balance = node.fetch_balance(ids.alice_public_key)
+starting_chain_height = len(node.active_chain) - 1
+
+# Attempt the double-spend
+coinbase = prepare_coinbase(ids.alice_public_key, height=4)
+# `alice_to_bob` has already been mined!
+unmined_block = Block(txns=[coinbase, alice_to_bob], 
+                      prev_id=alice_second_fork_block.id)
+alice_double_spend_block = mine_block(unmined_block)
+node.handle_block(alice_double_spend_block)
+
+# Collect final data
+alice_ending_balance = node.fetch_balance(ids.alice_public_key)
+ending_chain_height = len(node.active_chain) - 1
+
+# Assert that the block wasn't accepted, Alice's balance didn't change
+assert alice_starting_balance == alice_ending_balance
+assert starting_chain_height == ending_chain_height
+
 

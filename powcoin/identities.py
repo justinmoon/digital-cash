@@ -20,7 +20,7 @@ def key_to_name(key):
         bob_private_key.to_string(): "bob_private_key",
         bob_public_key.to_string(): "bob_public_key",
     }
-    return key_to_name_map[key.to_string()]
+    return key_to_name_map.get(key.to_string(), key)
 
 def user_public_key(name):
     private_key = user_private_key(name)
