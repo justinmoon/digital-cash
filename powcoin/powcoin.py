@@ -31,7 +31,8 @@ BLOCK_SUBSIDY = 50
 PORT = 10000
 node = None
 
-logging.basicConfig(level="INFO", format="%(asctime)-15s %(levelname)s %(message)s")
+# logging.basicConfig(level="INFO", format="%(asctime)-15s %(levelname)s %(message)s")
+logging.basicConfig(level="INFO", format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -281,15 +282,15 @@ class Node:
                     return chain, chain_index, height, is_tip
 
     def sync_utxo_set(self, chain, active_chain):
-        logging.info(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
+
+        if self.active_chain_index != self.chains.index(chain):
+            logging.info(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
 
         rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
 
-        # print(f"Rolling back: {rollback_blocks}")
-        # print(f"Syncing: {sync_blocks}")
-
         # Rollback every transaction in current active_chain but not in the new one
         # No exception handling here b/c failure would mean program is broken
+        # Iterate backwards because we're rolling BACK
         rollback_txns = []
         for block in rollback_blocks[::-1]:
             for tx in block.txns:
@@ -301,7 +302,6 @@ class Node:
         sync_txns = []
         for block in sync_blocks:
             for index, tx in enumerate(block.txns):
-                print("validating tx", tx)
                 try:
                     if index == 0:
                         self.validate_coinbase(tx)
@@ -340,14 +340,14 @@ class Node:
         # If everything worked update the "active chain"
         self.active_chain_index = self.chains.index(chain)
 
-        # logging.info("Block accepted. Active chain index is {self.active_chain_index}. Active chain height is {len(self.active_chain) - 1}")
+        logging.info(f"Block accepted: index={self.active_chain_index} height={len(self.active_chain) - 1}")
 
     def validate_block(self, block):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
-
     def chain_diffs(self, from_chain, to_chain):
+        """Calculate blocks unique to each chain"""
         fork_height = get_last_shared_block(from_chain, to_chain)
         rollback_blocks = from_chain[fork_height+1:]
         sync_blocks = to_chain[fork_height+1:]
@@ -365,8 +365,6 @@ class Node:
     def handle_block(self, block):
         # Claim the lock
         with self.chain_lock:
-
-            logging.info("handling block")
 
             # Validate the block
             self.validate_block(block)
@@ -390,10 +388,8 @@ class Node:
             except:
                 import traceback
                 print(traceback.format_exc())
-            logging.info("handling block")
 
             # Tell peers
-            logging.info("propogating block")
             for peer in self.peers:
                 send_message(peer, "block", block)
 
@@ -487,16 +483,12 @@ def mine_forever(public_key):
             prev_id=node.active_chain[-1].id,
         )
         mined_block = mine_block(unmined_block)
-        logging.info(f"Mined a block: {mined_block}")
         
         # This is False if mining was interrupted
         # Perhaps an exception would be wiser ...
         if mined_block:
+            logging.info(f"Mined a block")
             node.handle_block(mined_block)
-            logging.info(f"Mined a block: {mined_block}")
-            for peer in node.peers:
-                logging.info(peer)
-                send_message(peer, "block", mined_block)
 
 
 ##############
@@ -521,8 +513,6 @@ class TCPHandler(socketserver.BaseRequestHandler):
         command = message["command"]
         data = message["data"]
 
-        logger.info(f"received {command}")
-
         if command == "ping":
             self.respond(command="pong", data="")
 
@@ -530,7 +520,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             # If the block isn't new, ignore it
             chain_index, height = node.find_block(data)
             if chain_index == height == None:
-                logging.info(f"Handling block: {data}")
+                logging.info(f"Received block from peer")
 
                 node.handle_block(data)
                 # Tell the mining thread mine the new tip
