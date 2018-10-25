@@ -14,7 +14,7 @@ def send_tx(n, sender_private_key, recipient_public_key, amount):
 # Alice mines the genesis block #
 #################################
 
-genesis_coinbase = prepare_coinbase(public_key=ids.alice_public_key, height=-1)
+genesis_coinbase = prepare_coinbase(public_key=ids.alice_public_key, height=0)
 unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
 mined_genesis_block = mine_block(unmined_genesis_block)
 
@@ -134,6 +134,8 @@ assert node.active_chain == expected
 # Alice attempts a double-spend #
 #################################
 
+print("Alice's double-spend:")
+
 # Collect initial data
 alice_starting_balance = node.fetch_balance(ids.alice_public_key)
 starting_chain_height = len(node.active_chain) - 1
@@ -144,7 +146,10 @@ coinbase = prepare_coinbase(ids.alice_public_key, height=4)
 unmined_block = Block(txns=[coinbase, alice_to_bob], 
                       prev_id=alice_second_fork_block.id)
 alice_double_spend_block = mine_block(unmined_block)
-node.handle_block(alice_double_spend_block)
+try:
+    node.handle_block(alice_double_spend_block)
+except:
+    print("error raised attempting double spend")
 
 # Collect final data
 alice_ending_balance = node.fetch_balance(ids.alice_public_key)
@@ -153,5 +158,28 @@ ending_chain_height = len(node.active_chain) - 1
 # Assert that the block wasn't accepted, Alice's balance didn't change
 assert alice_starting_balance == alice_ending_balance
 assert starting_chain_height == ending_chain_height
+
+####################
+# Test the mempool #
+####################
+
+print()
+print("Testing mempool")
+print()
+
+alice_to_bob = send_tx(node, ids.alice_private_key, ids.bob_public_key, 20)
+node.handle_tx(alice_to_bob)
+assert alice_to_bob in node.mempool
+node.handle_tx(alice_to_bob)
+assert alice_to_bob in node.mempool
+
+
+coinbase = prepare_coinbase(ids.bob_public_key, height=4)
+unmined_block = Block(txns=[coinbase, alice_to_bob], 
+                      prev_id=alice_second_fork_block.id)
+alice_third_block = mine_block(unmined_block)
+node.handle_block(alice_third_block)
+
+assert alice_to_bob not in node.mempool
 
 
