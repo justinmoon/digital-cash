@@ -29,7 +29,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 16
+BITS = 4
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
@@ -118,6 +118,8 @@ class UnspentTxOut:
 
     def __repr__(self):
         return f"TxOut(tx_id={self.tx_id}, index={self.index} amount={self.amount}, public_key={key_to_name(self.public_key)})"
+
+
 class Block:
 
     def __init__(self, txns, prev_id, nonce=0):
@@ -134,6 +136,7 @@ class Block:
 
     def __repr__(self):
         return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
+
 
 class Chain(list):
 
@@ -177,13 +180,13 @@ def tx_in_to_utxo(tx_in, chain):
 
 class Node:
 
-    def __init__(self):
+    def __init__(self, node_id=None):
         self.active_chain_index = 0
         self.chains = []
         self.utxo_set = {}
         self.mempool = []
         self.peers = set()
-        self.address = (f"node{os.environ['ID']}", PORT)
+        self.address = (node_id, PORT)
         self.chain_lock = threading.Lock()
         self.syncing = False
 
@@ -198,11 +201,6 @@ class Node:
     @property
     def active_chain(self):
         return self.chains[self.active_chain_index]
-
-    @property
-    def mempool_outpoints(self):
-        return [tx_in.outpoint for tx in self.mempool 
-                               for tx_in in tx.tx_ins]
 
     def add_tx_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -245,10 +243,6 @@ class Node:
             # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo_set, \
                    f"{tx_in} not in utxo_set"
-
-            # # No pending transactions spending this same output
-            # FIXME
-            # assert tx_in.outpoint not in self.mempool_outpoints
 
             # Grab the tx_out
             tx_out = self.utxo_set[tx_in.outpoint]
@@ -661,8 +655,9 @@ def main(args):
         # node.chains.append([genesis_block])
         # node.active_chain_index = 0
 
+        node_id = int(os.environ["ID"])
 
-        duration = 5 * int(os.environ["ID"])
+        duration = 5 * node_id
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
@@ -670,7 +665,7 @@ def main(args):
 
         # Set up the node (for convience, alice get coinbase coins)
         global node
-        node = Node()
+        node = Node(node_id=node_id)
 
         # Insert coinbase
         # FIXME: this is a mess
@@ -683,10 +678,8 @@ def main(args):
 
         # FIXME
         # start the first node early
-        node_id = int(os.environ["ID"])
         if node_id == 0:
             logger.info("starting miner")
-            node_id = int(os.environ["ID"])
             mining_public_key = node_public_key(node_id)
             thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
             thread.start()

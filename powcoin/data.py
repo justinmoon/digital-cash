@@ -2,9 +2,9 @@ from powcoin import *
 from pprint import pprint
 import identities as ids
 
-node = Node([])
-alice_node = Node([])
-bob_node = Node([])
+node = Node()
+alice_node = Node()
+bob_node = Node()
 
 def send_tx(n, sender_private_key, recipient_public_key, amount):
     utxos = n.fetch_utxos(sender_private_key.get_verifying_key())
