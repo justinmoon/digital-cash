@@ -13,7 +13,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re
 
 import pprint
 
@@ -183,12 +183,13 @@ class Node:
         self.utxo_set = {}
         self.mempool = []
         self.peers = set()
+        self.address = (f"node{os.environ['ID']}", PORT)
         self.chain_lock = threading.Lock()
         self.syncing = False
 
     def join_network(self, peers):
         for peer in peers:
-            response = send_message(peer, "join", "", response=True)
+            response = send_message(peer, "join", self.address, response=True)
 
             # Let's say a "None" response turns us down
             if response is not None:
@@ -314,6 +315,9 @@ class Node:
                     chain_index = self.chains.index(chain)
                     return chain, chain_index, height, is_tip
 
+        # FIXME ???
+        return None, None, None, None
+
     def sync_utxo_set(self, chain, active_chain):
 
         if self.active_chain_index != self.chains.index(chain):
@@ -433,8 +437,11 @@ class Node:
     def initial_block_download(self):
         # just talk to one peer for now
         self.syncing = True
-        send_message(self.peers[0], "get_block", self.active_chain[-1].id)
 
+        # FIXME
+        if len(self.peers):
+            peer = next(iter(self.peers))
+            send_message(peer, "get_blocks", self.active_chain[-1].id)
 
 
 ###################
@@ -539,6 +546,12 @@ def prepare_message(command, data):
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
+    def peer(self):
+        address = self.client_address[0]
+        raw_host_info = socket.gethostbyaddr(address)
+        hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+        return (hostname, PORT)
+
     def respond(self, command, data):
         response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
@@ -553,27 +566,23 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "block":
+            if data == None:
+                logger.info(f"Initial block download complete")
+                node.syncing = False
+                return
+
+            logging.info(f"Received block from peer")
             chain_index, height = node.find_block(data)
 
             # If we can't find the block locally, let's add it
-            # If we already know about it, then ignore
             if chain_index == height == None:
-                logging.info(f"Received block from peer")
-
                 node.handle_block(data)
                 # Tell the mining thread mine the new tip
-                logger.info(f"in tcphandler. mempool has {len(node.mempool)}")
                 mining_interrupt.set()
 
+            # If syncing, request next block
             if node.syncing:
-                if chain_index == height == None:
-                    # We're done syncing
-                    node.syncing = True
-                else:
-                    # We can call this repeatedly
-                    node.initial_block_download()
-
-            # logging.info(f"Ignoring block: {data}")
+                node.initial_block_download()
 
         if command == "tx":
             node.handle_tx(data)
@@ -587,31 +596,25 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="utxos-response", data=utxos)
 
         if command == "join":
-            logger.info("received join msg")
             node.peers.add(data)
             self.respond(command="peers", data=node.peers)
+            logger.info("received join msg")
+
+        if command == "peers":
+            logger.info("received peer list")
 
         if command == "get_blocks":
-            last_block_hash = data
-            last_block = None
             next_block = None
-
             # locate the block in the main chain
             # FIXME: this should call a general-purpose function
             for block in node.active_chain:
-                if block.id == last_block_hash:
-                    last_block = block
+                if block.prev_id == data:
+                    next_block = block
                     break
-            
-            # fetch the next (N?) blocks
-            # FIXME
-            height = node.active_chain.index(last_block)
 
-            if height < len(node.active_chain) - 1:
-                next_block = node.active_chain[height]
-
-            # respond
-            self.respond(command="block", data=next_block)
+            # Says the IBD is done
+            send_message(self.peer(), command="block", data=next_block)
+            logger.info(f"sent 'block' message: {next_block}")
 
 
 def external_address(node):
@@ -633,7 +636,6 @@ def send_message(address, command, data, response=False, retries=3):
             s.sendall(serialize(message))
 
             if response:
-                logger.info("sending response")
                 return deserialize(s.recv(5000))
         except:
             logger.info("retrying")
@@ -649,6 +651,7 @@ def send_message(address, command, data, response=False, retries=3):
 def main(args):
     if args["serve"]:
         logger.info("hello, world")
+
         # FIXME: needs coinbase
         # genesis_block = Block(
             # txns=[],
@@ -657,6 +660,13 @@ def main(args):
         # )
         # node.chains.append([genesis_block])
         # node.active_chain_index = 0
+
+
+        duration = 5 * int(os.environ["ID"])
+        logger.info(f"sleeping {duration}")
+        time.sleep(duration)
+        logger.info("waking up")
+
 
         # Set up the node (for convience, alice get coinbase coins)
         global node
@@ -671,34 +681,42 @@ def main(args):
         node.active_chain_index = 0
         node.add_tx_to_utxo_set(genesis_coinbase)
 
+        # FIXME
+        # start the first node early
+        node_id = int(os.environ["ID"])
+        if node_id == 0:
+            logger.info("starting miner")
+            node_id = int(os.environ["ID"])
+            mining_public_key = node_public_key(node_id)
+            thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
+            thread.start()
+
+
+
         # First thing, start server in another thread
         server_thread = threading.Thread(target=serve)
         server_thread.start()
 
         # Join the network
         peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
-        while len(node.peers) < 2:
-            node.join_network(peers)
-            time.sleep(2)
-            logger.info(f"{len(node.peers)} peer connections")
+        node.join_network(peers)
 
-        ## Do initial block download
-        # node.initial_block_download()
+        # Do initial block download
+        logger.info("starting ibd")
+        node.initial_block_download()
 
-        # # Wait until IBD completes
-        # logger.info("starting ibd")
-        # while True:
-            # if node.syncing:
-                # time.sleep(1)
-                # logger.info("still syncing")
-            # else:
-                # break
+        # Wait until IBD completes
+        while node.syncing:
+            logger.info(f"still syncing {node.syncing}")
+            time.sleep(1)
 
         # Run the miner in a thread
-        node_id = int(os.environ["ID"])
-        mining_public_key = node_public_key(node_id)
-        thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
-        thread.start()
+        if node_id != 0:
+            logger.info("starting miner")
+            node_id = int(os.environ["ID"])
+            mining_public_key = node_public_key(node_id)
+            thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
+            thread.start()
 
     elif args["ping"]:
         address = address_from_host(args["--node"])

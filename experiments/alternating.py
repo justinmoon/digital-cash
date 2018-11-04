@@ -26,7 +26,9 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
     def peer(self):
         address = self.client_address[0]
+        logger.info(f"address: {address}")
         host_info = socket.gethostbyaddr(address)
+        logger.info(f"host: {host_info}")
         return re.search(r"_(.*?)_", host_info[0]).group(1)
 
     def handle(self):
