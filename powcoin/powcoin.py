@@ -29,7 +29,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 19
+BITS = 16
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
@@ -71,10 +71,14 @@ class Tx:
 
     @property
     def id(self):
+        # FIXME
         return mining_hash(f"Tx(tx_ins={self.tx_ins}, tx_outs={self.tx_outs})")
 
     def __repr__(self):
         return f"Tx(id={self.id}, tx_ins={self.tx_ins}, tx_outs={self.tx_outs})"
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 class TxIn:
 
@@ -170,15 +174,25 @@ def tx_in_to_utxo(tx_in, chain):
             return UnspentTxOut(tx_id=tx_in.tx_id, index=tx_in.index,
                    amount=tx_out.amount, public_key=tx_out.public_key)
 
+
 class Node:
 
-    def __init__(self, peers):
+    def __init__(self):
         self.active_chain_index = 0
         self.chains = []
         self.utxo_set = {}
         self.mempool = []
-        self.peers = peers
+        self.peers = set()
         self.chain_lock = threading.Lock()
+        self.syncing = False
+
+    def join_network(self, peers):
+        for peer in peers:
+            response = send_message(peer, "join", "", response=True)
+
+            # Let's say a "None" response turns us down
+            if response is not None:
+                self.peers.add(peer)
 
     @property
     def active_chain(self):
@@ -186,11 +200,8 @@ class Node:
 
     @property
     def mempool_outpoints(self):
-        return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
-
-    @property
-    def mempool_tx_ids(self):
-        return [tx.id for tx in self.mempool]
+        return [tx_in.outpoint for tx in self.mempool 
+                               for tx_in in tx.tx_ins]
 
     def add_tx_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -222,6 +233,7 @@ class Node:
     def fetch_balance(self, public_key):
         # Fetch utxos associated with this public key
         utxos = self.fetch_utxos(public_key)
+
         # Sum the amounts
         return sum([utxo.amount for utxo in utxos])
 
@@ -234,6 +246,7 @@ class Node:
                    f"{tx_in} not in utxo_set"
 
             # # No pending transactions spending this same output
+            # FIXME
             # assert tx_in.outpoint not in self.mempool_outpoints
 
             # Grab the tx_out
@@ -264,17 +277,15 @@ class Node:
         try:
             self.validate_tx(tx)
         except:
-            logger.debug(f"rejecting invalid tx: {tx}")
+            logger.info(f"rejecting invalid tx: {tx}")
             import traceback
             logger.info(traceback.format_exc())
             return
 
         # Add to our mempool if it passes validation and isn't already there
-        print( tx.id not in self.mempool_tx_ids)
-        if tx.id not in self.mempool_tx_ids:
+        if tx not in self.mempool:
             self.mempool.append(tx)
-            logger.info("ADDED TX TO MEMPOOL")
-
+            logger.info("Added tx to mempool")
 
             # Tell peers
             for peer in self.peers:
@@ -287,7 +298,8 @@ class Node:
                     return chain_index, height
         return None, None
 
-    def find_prev_block(self, block): # FIXME: HACK check the active_chain manually
+    def find_prev_block(self, block):
+        # FIXME: HACK check the active_chain manually
         if self.active_chain[-1].id == block.prev_id:
             height = len(self.active_chain) - 1
             is_tip = height == len(self.active_chain) - 1
@@ -317,7 +329,6 @@ class Node:
             for tx in block.txns:
                 self.remove_tx_from_utxo_set(tx)
                 rollback_txns.append(tx)
-        
         
         # Attempt to update the UTXO set
         sync_txns = []
@@ -353,20 +364,17 @@ class Node:
 
         # Add rolled-back transactions to the mempool
         for tx in rollback_txns:
-            if tx.id not in self.mempool_tx_ids:
+            if tx not in self.mempool:
                 self.mempool.append(tx)
 
         # Remove freshly synced transactions from mempool
         for tx in sync_txns:
-            if tx.id in self.mempool_tx_ids:
-                # FIXME: implement Tx.__eq__ (just compare ids)
-                index = self.mempool_tx_ids.index(tx.id)
-                self.mempool.pop(index)
-                logging.info("\n\nRemoved tx from mempool. Now contains {len(self.mempool)}\n\n")
+            if tx in self.mempool:
+                self.mempool.remove(tx)
+                logging.info(f"Removed tx from mempool. Now contains {len(self.mempool)}\n\n")
         
         # If everything worked update the "active chain"
         self.active_chain_index = self.chains.index(chain)
-
         logging.info(f"Block accepted: index={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
 
     def validate_block(self, block):
@@ -396,9 +404,8 @@ class Node:
             # Validate the block
             self.validate_block(block)
 
-
-            # YOLO
-            active_chain = deepcopy(self.active_chain)  # FIXME
+            # FIXME
+            active_chain = deepcopy(self.active_chain)  
 
             # If this is a new fork, we need to create a new chain
             chain, chain_index, height, is_tip = self.find_prev_block(block)
@@ -409,12 +416,12 @@ class Node:
             chain.append(block)
 
             # Resync the UTXO database if the "work record" was broken
-            try:
-                if total_work(chain) > total_work(active_chain):
+            if total_work(chain) > total_work(active_chain):
+                try:
                     self.sync_utxo_set(chain, active_chain)
-            except:
-                import traceback
-                print(traceback.format_exc())
+                except:
+                    import traceback
+                    logger.info(traceback.format_exc())
 
             # Tell peers
             for peer in self.peers:
@@ -423,12 +430,11 @@ class Node:
         # FIXME
         logging.info(f"Active chain index is {self.active_chain_index}. Active chain height is {len(self.active_chain) - 1}")
 
-    def submit_block(self):
-        # Make the block
-        block = self.make_block()
+    def initial_block_download(self):
+        # just talk to one peer for now
+        self.syncing = True
+        send_message(self.peers[0], "get_block", self.active_chain[-1].id)
 
-        # Save locally
-        self.handle_block(block)
 
 
 ###################
@@ -547,8 +553,10 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "block":
-            # If the block isn't new, ignore it
             chain_index, height = node.find_block(data)
+
+            # If we can't find the block locally, let's add it
+            # If we already know about it, then ignore
             if chain_index == height == None:
                 logging.info(f"Received block from peer")
 
@@ -556,6 +564,14 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 # Tell the mining thread mine the new tip
                 logger.info(f"in tcphandler. mempool has {len(node.mempool)}")
                 mining_interrupt.set()
+
+            if node.syncing:
+                if chain_index == height == None:
+                    # We're done syncing
+                    node.syncing = True
+                else:
+                    # We can call this repeatedly
+                    node.initial_block_download()
 
             # logging.info(f"Ignoring block: {data}")
 
@@ -570,6 +586,34 @@ class TCPHandler(socketserver.BaseRequestHandler):
             utxos = node.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
+        if command == "join":
+            logger.info("received join msg")
+            node.peers.add(data)
+            self.respond(command="peers", data=node.peers)
+
+        if command == "get_blocks":
+            last_block_hash = data
+            last_block = None
+            next_block = None
+
+            # locate the block in the main chain
+            # FIXME: this should call a general-purpose function
+            for block in node.active_chain:
+                if block.id == last_block_hash:
+                    last_block = block
+                    break
+            
+            # fetch the next (N?) blocks
+            # FIXME
+            height = node.active_chain.index(last_block)
+
+            if height < len(node.active_chain) - 1:
+                next_block = node.active_chain[height]
+
+            # respond
+            self.respond(command="block", data=next_block)
+
+
 def external_address(node):
     i = int(node[-1])
     port = PORT + i
@@ -579,13 +623,24 @@ def serve():
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
-def send_message(address, command, data, response=False):
+def send_message(address, command, data, response=False, retries=3):
+    if retries == 0:
+        return None
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect(address)
-        s.sendall(serialize(message))
-        if response:
-            return deserialize(s.recv(5000))
+        try:
+            s.connect(address)
+            s.sendall(serialize(message))
+
+            if response:
+                logger.info("sending response")
+                return deserialize(s.recv(5000))
+        except:
+            logger.info("retrying")
+            time.sleep(0.01)
+            return send_message(address, command, data, response, 
+                         retries=retries-1)
+            
 
 #######
 # CLI #
@@ -593,6 +648,7 @@ def send_message(address, command, data, response=False):
 
 def main(args):
     if args["serve"]:
+        logger.info("hello, world")
         # FIXME: needs coinbase
         # genesis_block = Block(
             # txns=[],
@@ -604,8 +660,10 @@ def main(args):
 
         # Set up the node (for convience, alice get coinbase coins)
         global node
-        peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
-        node = Node(peers)
+        node = Node()
+
+        # Insert coinbase
+        # FIXME: this is a mess
         genesis_coinbase = prepare_coinbase(public_key=user_public_key("alice"), height=0)
         unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
         mined_genesis_block = mine_block(unmined_genesis_block)
@@ -613,13 +671,35 @@ def main(args):
         node.active_chain_index = 0
         node.add_tx_to_utxo_set(genesis_coinbase)
 
+        # First thing, start server in another thread
+        server_thread = threading.Thread(target=serve)
+        server_thread.start()
+
+        # Join the network
+        peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
+        while len(node.peers) < 2:
+            node.join_network(peers)
+            time.sleep(2)
+            logger.info(f"{len(node.peers)} peer connections")
+
+        ## Do initial block download
+        # node.initial_block_download()
+
+        # # Wait until IBD completes
+        # logger.info("starting ibd")
+        # while True:
+            # if node.syncing:
+                # time.sleep(1)
+                # logger.info("still syncing")
+            # else:
+                # break
+
         # Run the miner in a thread
         node_id = int(os.environ["ID"])
         mining_public_key = node_public_key(node_id)
         thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
         thread.start()
 
-        serve()
     elif args["ping"]:
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
@@ -627,13 +707,13 @@ def main(args):
         public_key = user_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
-        print(response["data"])
+        logger.info(response["data"])
 
     elif args["utxos"]:
         public_key = user_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "utxos", public_key, response=True)
-        print(response["data"])
+        logger.info(response["data"])
 
     elif args["tx"]:
         # Grab parameters
@@ -653,9 +733,9 @@ def main(args):
 
         # send to node
         send_message(address, "tx", tx)
-        print(tx)
+        logger.info(tx)
     else:
-        print("Invalid command")
+        logger.info("Invalid command")
 
 
 if __name__ == '__main__':
