@@ -293,16 +293,14 @@ class Node:
                     return chain_index, height
         return None, None
 
-    def find_prev_block(self, block):
-        # FIXME: HACK check the active_chain manually
-        if self.active_chain[-1].id == block.prev_id:
-            height = len(self.active_chain) - 1
-            is_tip = height == len(self.active_chain) - 1
-            return self.active_chain, self.active_chain_index, height, is_tip
+    def work_ordered_chains(self):
+        def key(chain):
+             is_active = self.chains.index(chain) == self.active_chain_index
+             return len(chain) + int(is_active)
+        return sorted(self.chains, key=key, reverse=True)
 
-        # longest chains first
-        sorted_chains = sorted(self.chains, key=lambda c: len(c), reverse=True)
-        for chain_index, chain in enumerate(sorted_chains):
+    def find_prev_block(self, block):
+        for chain_index, chain in enumerate(self.work_ordered_chains()):
             for height, _block in enumerate(chain):
                 if _block.id == block.prev_id:
                     is_tip = height == len(chain) - 1
