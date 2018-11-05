@@ -286,29 +286,19 @@ class Node:
             for peer in self.peers:
                 send_message(peer, "tx", tx)
 
-    def find_block(self, block):
-        for chain_index, chain in enumerate(self.chains):
-            for height, _block in enumerate(chain):
-                if block.id == _block.id:
-                    return chain_index, height
-        return None, None
+    def locate_block(self, block_id):
+        for chain_index, chain in enumerate(self.work_ordered_chains()):
+            for height, block in enumerate(chain):
+                if block.id == block_id:
+                    is_tip = height == len(chain) - 1
+                    return chain, chain_index, height, is_tip
+        return None, None, None, None
 
     def work_ordered_chains(self):
         def key(chain):
              is_active = self.chains.index(chain) == self.active_chain_index
              return len(chain) + int(is_active)
         return sorted(self.chains, key=key, reverse=True)
-
-    def find_prev_block(self, block):
-        for chain_index, chain in enumerate(self.work_ordered_chains()):
-            for height, _block in enumerate(chain):
-                if _block.id == block.prev_id:
-                    is_tip = height == len(chain) - 1
-                    chain_index = self.chains.index(chain)
-                    return chain, chain_index, height, is_tip
-
-        # FIXME ???
-        return None, None, None, None
 
     def sync_utxo_set(self, chain, active_chain):
 
@@ -415,7 +405,7 @@ class Node:
             active_chain = self.active_chain
 
             # If this is a new fork, we need to create a new chain
-            chain, chain_index, height, is_tip = self.find_prev_block(block)
+            chain, chain_index, height, is_tip = self.locate_block(block.prev_id)
             if not is_tip:
                 chain, chain_index = self.create_branch(chain_index, height)
 
@@ -577,7 +567,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 return
 
             logging.info(f"Received block from peer")
-            chain_index, height = node.find_block(data)
+            _, chain_index, height, _ = node.locate_block(data.id)
 
             # If we can't find the block locally, let's add it
             if chain_index == height == None:
