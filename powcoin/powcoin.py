@@ -406,6 +406,10 @@ class Node:
 
             # If this is a new fork, we need to create a new chain
             chain, chain_index, height, is_tip = self.locate_block(block.prev_id)
+            # FIXME: what to do if chain_index / height come back None???
+            # (orphan blocks ...)
+            # e.g. while doing ibd you get the tip of the real chain ...
+            # this causes an exception right now ...
             if not is_tip:
                 chain, chain_index = self.create_branch(chain_index, height)
 
@@ -431,8 +435,6 @@ class Node:
 
     def initial_block_download(self):
         # just talk to one peer for now
-        self.syncing = True
-
         # FIXME
         if len(self.peers):
             peer = next(iter(self.peers))
@@ -660,7 +662,7 @@ def main(args):
 
         node_id = int(os.environ["ID"])
 
-        duration = 1 * node_id
+        duration = 5 * node_id
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
@@ -699,6 +701,7 @@ def main(args):
 
         # Do initial block download
         logger.info("starting ibd")
+        node.syncing = True
         node.initial_block_download()
 
         # Wait until IBD completes
