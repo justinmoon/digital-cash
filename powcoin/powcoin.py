@@ -37,7 +37,7 @@ node = None
 
 # logging.basicConfig(level="INFO", format="%(asctime)-15s %(levelname)s %(message)s")
 # logging.basicConfig(level="INFO", format="%(message)s")
-logging.basicConfig(level="DEBUG", format="%(message)s")
+logging.basicConfig(level="DEBUG", format="%(threadName)-6s | %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -656,6 +656,8 @@ def send_message(address, command, data, response=False, retries=3):
 def main(args):
     if args["serve"]:
         logger.info("hello, world")
+        threading.current_thread().name = "main"
+
 
         # FIXME: needs coinbase
         # genesis_block = Block(
@@ -692,13 +694,13 @@ def main(args):
         if node_id == 0:
             logger.info("starting miner")
             mining_public_key = node_public_key(node_id)
-            thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
+            thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
             thread.start()
 
 
 
         # First thing, start server in another thread
-        server_thread = threading.Thread(target=serve)
+        server_thread = threading.Thread(target=serve, name="server")
         server_thread.start()
 
         # Join the network
@@ -719,7 +721,7 @@ def main(args):
             logger.info("starting miner")
             node_id = int(os.environ["ID"])
             mining_public_key = node_public_key(node_id)
-            thread = threading.Thread(target=mine_forever, args=(mining_public_key,))
+            thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
             thread.start()
 
     elif args["ping"]:
