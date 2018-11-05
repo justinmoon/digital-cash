@@ -29,7 +29,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 15
+BITS = 12
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
@@ -397,6 +397,11 @@ class Node:
     def handle_block(self, block):
         # Claim the lock
         with self.chain_lock:
+            # see if it's new
+            chain, _, _, _ = self.locate_block(block.id)
+            if chain:
+                # already know about it
+                raise Exception("already seen it")
 
             # Validate the block
             self.validate_block(block)
@@ -430,8 +435,12 @@ class Node:
             for peer in self.peers:
                 send_message(peer, "block", block)
 
-        # FIXME
-        logging.info(f"Block accepted: chain={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
+            # FIXME
+            logging.info(f"Block accepted: chain={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
+
+            # Sanity checks
+            assert len(self.active_chain) == \
+                   max([len(chain) for chain in self.chains])
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -498,11 +507,11 @@ def mining_hash(s):
     return hashlib.sha256(s).hexdigest()
 
 
-def mine_block(block):
-    nonce = 0
+def mine_block(block, step=3):
+    nonce = int(os.environ["ID"])
     # FIXME: make this line more readable
     while int(mining_hash(block.header(nonce)), 16) >= POW_TARGET:
-        nonce += 1
+        nonce += step  # Hack to make mining more competitive
         if mining_interrupt.is_set():
             logger.info("Mining interrupted")
             mining_interrupt.clear()
@@ -527,7 +536,6 @@ def mine_forever(public_key):
         # Perhaps an exception would be wiser ...
         if mined_block:
             logging.info(f"Mined a block w/ txns")
-            # logging.info(mined_block.txns)
             node.handle_block(mined_block)
 
 
@@ -569,13 +577,12 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 return
 
             logging.info(f"Received block from peer")
-            _, chain_index, height, _ = node.locate_block(data.id)
 
-            # If we can't find the block locally, let's add it
-            if chain_index == height == None:
+            try:
                 node.handle_block(data)
-                # Tell the mining thread mine the new tip
                 mining_interrupt.set()
+            except:
+                pass
 
             # If syncing, request next block
             if node.syncing:
@@ -583,7 +590,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
         if command == "tx":
             node.handle_tx(data)
-
+    
         if command == "balance":
             balance = node.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
@@ -625,7 +632,7 @@ def serve():
 
 def send_message(address, command, data, response=False, retries=3):
     if retries == 0:
-        return None
+        raise Exception("connection error")
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -647,9 +654,7 @@ def send_message(address, command, data, response=False, retries=3):
 
 def main(args):
     if args["serve"]:
-        logger.info("hello, world")
         threading.current_thread().name = "main"
-
 
         # FIXME: needs coinbase
         # genesis_block = Block(
@@ -676,20 +681,10 @@ def main(args):
         # FIXME: this is a mess
         genesis_coinbase = prepare_coinbase(public_key=user_public_key("alice"), height=0)
         unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
-        mined_genesis_block = mine_block(unmined_genesis_block)
+        mined_genesis_block = mine_block(unmined_genesis_block, step=1)
         node.chains.append([mined_genesis_block])
         node.active_chain_index = 0
         node.add_tx_to_utxo_set(genesis_coinbase)
-
-        # FIXME
-        # start the first node early
-        if node_id == 0:
-            logger.info("starting miner")
-            mining_public_key = node_public_key(node_id)
-            thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
-            thread.start()
-
-
 
         # First thing, start server in another thread
         server_thread = threading.Thread(target=serve, name="server")
@@ -704,18 +699,12 @@ def main(args):
         node.syncing = True
         node.initial_block_download()
 
-        # Wait until IBD completes
-        while node.syncing:
-            logger.info(f"still syncing {node.syncing}")
-            time.sleep(1)
-
         # Run the miner in a thread
-        if node_id != 0:
-            logger.info("starting miner")
-            node_id = int(os.environ["ID"])
-            mining_public_key = node_public_key(node_id)
-            thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
-            thread.start()
+        logger.info("starting miner")
+        node_id = int(os.environ["ID"])
+        mining_public_key = node_public_key(node_id)
+        thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
+        thread.start()
 
     elif args["ping"]:
         address = address_from_host(args["--node"])
@@ -726,6 +715,8 @@ def main(args):
         response = send_message(address, "balance", public_key, response=True)
         logger.info(response["data"])
 
+
+    
     elif args["utxos"]:
         public_key = user_public_key(args["<name>"])
         address = external_address(args["--node"])
