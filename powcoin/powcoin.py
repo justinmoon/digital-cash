@@ -29,7 +29,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 4
+BITS = 15
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
@@ -186,7 +186,7 @@ class Node:
         self.utxo_set = {}
         self.mempool = []
         self.peers = set()
-        self.address = (node_id, PORT)
+        self.address = (f"node{node_id}", PORT)
         self.chain_lock = threading.Lock()
         self.syncing = False
 
@@ -242,7 +242,7 @@ class Node:
         for index, tx_in in enumerate(tx.tx_ins):
             # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo_set, \
-                   f"{tx_in} not in utxo_set"
+                   f"{tx_in.outpoint} not in utxo_set"
 
             # Grab the tx_out
             tx_out = self.utxo_set[tx_in.outpoint]
@@ -315,7 +315,13 @@ class Node:
         if self.active_chain_index != self.chains.index(chain):
             logger.info(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
 
-        rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
+        # FIXME have to treat active chain separately 
+        # since it changes under our feet
+        if self.chains.index(chain) == self.active_chain_index:
+            sync_blocks = active_chain[-1:]
+            rollback_blocks = []
+        else:
+            rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
 
         # Rollback every transaction in current active_chain but not in the new one
         # No exception handling here b/c failure would mean program is broken
@@ -360,18 +366,23 @@ class Node:
 
         # Add rolled-back transactions to the mempool
         for tx in rollback_txns:
-            if tx not in self.mempool:
-                self.mempool.append(tx)
+            if tx not in self.mempool and not tx.is_coinbase:
+                try:
+                    self.validate_tx(tx)
+                    self.mempool.append(tx)
+                except:
+                    # Kinda hacky, but this will reject coinbase txns
+                    logger.info("couldn't add back to mempool")
+                    continue
 
         # Remove freshly synced transactions from mempool
         for tx in sync_txns:
             if tx in self.mempool:
                 self.mempool.remove(tx)
-                logging.info(f"Removed tx from mempool. Now contains {len(self.mempool)}\n\n")
+                logging.info(f"Removed tx from mempool")
         
         # If everything worked update the "active chain"
         self.active_chain_index = self.chains.index(chain)
-        logging.info(f"Block accepted: index={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
 
     def validate_block(self, block):
         # Check POW
@@ -400,8 +411,8 @@ class Node:
             # Validate the block
             self.validate_block(block)
 
-            # FIXME
-            active_chain = deepcopy(self.active_chain)  
+            # FIXME just kill this variable
+            active_chain = self.active_chain
 
             # If this is a new fork, we need to create a new chain
             chain, chain_index, height, is_tip = self.find_prev_block(block)
@@ -412,7 +423,9 @@ class Node:
             chain.append(block)
 
             # Resync the UTXO database if the "work record" was broken
-            if total_work(chain) > total_work(active_chain):
+            # Or if we're extending the active chain
+            if total_work(chain) > total_work(active_chain) or \
+                    self.chains.index(chain) == self.active_chain_index:
                 try:
                     self.sync_utxo_set(chain, active_chain)
                 except:
@@ -424,7 +437,7 @@ class Node:
                 send_message(peer, "block", block)
 
         # FIXME
-        logging.info(f"Active chain index is {self.active_chain_index}. Active chain height is {len(self.active_chain) - 1}")
+        logging.info(f"Block accepted: chain={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -655,7 +668,7 @@ def main(args):
 
         node_id = int(os.environ["ID"])
 
-        duration = 5 * node_id
+        duration = 1 * node_id
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
