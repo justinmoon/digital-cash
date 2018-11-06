@@ -7,7 +7,7 @@ defusedxml==0.5.0
 docopt==0.6.2
 
 #ecdsa==0.13
--e git+https://github.com/justinmoon/python-ecdsa.git@46819765c4c8e3dae68f06f5c56d27554484a0ec#egg=ecdsa
+git+https://github.com/justinmoon/python-ecdsa.git@46819765c4c8e3dae68f06f5c56d27554484a0ec#egg=ecdsa
 
 entrypoints==0.2.3
 html5lib==1.0.1
