@@ -21,14 +21,26 @@ Go to your terminal, type “python3” and hit enter. If you don’t see a “p
 
 ### Step 4: Clone the Project with Git, install dependencies, and run it
 
-Execute the following command in your terminal to clone the course and access the introductory “Lesson 0”:
+For Mac / Linux, open your terminal and execute the following commands:
 
 ```
 git clone https://github.com/superquest/digital-cash.git
 cd digital-cash
-python3 -m virtualenv venv
+python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install -r requirements.txt
+jupyter notebook
+```
+
+For Windows, there are 2 options. First, you can install the [Windows Linux Subsystem](https://docs.microsoft.com/en-us/windows/wsl/install-win10) and follow the instructions above. Or you can use open PowerShell and execute the following commands:
+
+```
+git clone https://github.com/superquest/digital-cash.git
+cd .\digital-cash\
+py -m venv venv
+.\venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r .\requirements.txt
 jupyter notebook
 ```
 
