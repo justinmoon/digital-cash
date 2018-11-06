@@ -161,6 +161,8 @@ def txn_iterator(chain):
         for height, block in enumerate(chain) for txn in block.txns)
 
 def get_last_shared_block(chain_one, chain_two):
+    # FIXME bad name
+    # FIXME can we just use locate_block?
     for height, (b1, b2) in enumerate(zip(chain_one, chain_two)):
         if b1.id != b2.id:
             return height - 1
@@ -300,7 +302,7 @@ class Node:
              return len(chain) + int(is_active)
         return sorted(self.chains, key=key, reverse=True)
 
-    def sync_utxo_set(self, chain, active_chain):
+    def sync_utxo_set(self, chain):
 
         if self.active_chain_index != self.chains.index(chain):
             logger.info(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
@@ -308,10 +310,10 @@ class Node:
         # FIXME have to treat active chain separately 
         # since it changes under our feet
         if self.chains.index(chain) == self.active_chain_index:
-            sync_blocks = active_chain[-1:]
+            sync_blocks = self.active_chain[-1:]
             rollback_blocks = []
         else:
-            rollback_blocks, sync_blocks = self.chain_diffs(active_chain, chain)
+            rollback_blocks, sync_blocks = self.chain_diffs(chain)
 
         # Rollback every transaction in current active_chain but not in the new one
         # No exception handling here b/c failure would mean program is broken
@@ -378,10 +380,10 @@ class Node:
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
-    def chain_diffs(self, from_chain, to_chain):
+    def chain_diffs(self, to_chain):
         """Calculate blocks unique to each chain"""
-        fork_height = get_last_shared_block(from_chain, to_chain)
-        rollback_blocks = from_chain[fork_height+1:]
+        fork_height = get_last_shared_block(self.active_chain, to_chain)
+        rollback_blocks = self.active_chain[fork_height+1:]
         sync_blocks = to_chain[fork_height+1:]
         return rollback_blocks, sync_blocks
 
@@ -406,9 +408,6 @@ class Node:
             # Validate the block
             self.validate_block(block)
 
-            # FIXME just kill this variable
-            active_chain = self.active_chain
-
             # If this is a new fork, we need to create a new chain
             chain, chain_index, height, is_tip = self.locate_block(block.prev_id)
             # FIXME: what to do if chain_index / height come back None???
@@ -423,10 +422,10 @@ class Node:
 
             # Resync the UTXO database if the "work record" was broken
             # Or if we're extending the active chain
-            if total_work(chain) > total_work(active_chain) or \
+            if total_work(chain) > total_work(self.active_chain) or \
                     self.chains.index(chain) == self.active_chain_index:
                 try:
-                    self.sync_utxo_set(chain, active_chain)
+                    self.sync_utxo_set(chain)
                 except:
                     import traceback
                     logger.info(traceback.format_exc())
