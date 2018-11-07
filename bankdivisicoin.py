@@ -26,6 +26,10 @@ class TxIn:
     def spend_message(self):
         return f"{self.tx_id}:{self.index}".encode()
 
+    @property
+    def outpoint(self):
+        return (self.tx_id, self.index)
+
 class TxOut:
 
     def __init__(self, tx_id, index, amount, public_key):
@@ -33,6 +37,10 @@ class TxOut:
         self.index = index
         self.amount = amount
         self.public_key = public_key
+
+    @property
+    def outpoint(self):
+        return (self.tx_id, self.index)
 
 class Bank:
 
