@@ -29,11 +29,12 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 12
+BITS = 16
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
 node = None
+chain_lock = threading.Lock()
 
 # logging.basicConfig(level="INFO", format="%(asctime)-15s %(levelname)s %(message)s")
 # logging.basicConfig(level="INFO", format="%(message)s")
@@ -189,7 +190,6 @@ class Node:
         self.mempool = []
         self.peers = set()
         self.address = (f"node{node_id}", PORT)
-        self.chain_lock = threading.Lock()
         self.syncing = False
 
     def join_network(self, peers):
@@ -373,6 +373,13 @@ class Node:
                 self.mempool.remove(tx)
                 logging.info(f"Removed tx from mempool")
         
+
+        # Sanity check
+        prev_id = self.active_chain[0].id
+        for block in self.active_chain[1:]:
+            assert block.prev_id == prev_id
+            prev_id = block.id
+
         # If everything worked update the "active chain"
         self.active_chain_index = self.chains.index(chain)
 
@@ -387,9 +394,10 @@ class Node:
         sync_blocks = to_chain[fork_height+1:]
         return rollback_blocks, sync_blocks
 
-    def create_branch(self, chain_index, height):
+    def create_branch(self, chain_index, height, base_chain):
         # +1 b/c we want to include this block
-        base_chain = self.chains[chain_index][:height+1]  
+        base_chain = base_chain[:height+1]  
+        assert height+1 == len(base_chain), f"{height+1} | {len(base_chain)}"
         self.chains.append(base_chain)
         new_chain_index = len(self.chains) - 1
         logging.info(f"CREATED FORK (index={new_chain_index})")
@@ -398,7 +406,7 @@ class Node:
 
     def handle_block(self, block):
         # Claim the lock
-        with self.chain_lock:
+        with chain_lock:
             # see if it's new
             chain, _, _, _ = self.locate_block(block.id)
             if chain:
@@ -410,12 +418,13 @@ class Node:
 
             # If this is a new fork, we need to create a new chain
             chain, chain_index, height, is_tip = self.locate_block(block.prev_id)
+
             # FIXME: what to do if chain_index / height come back None???
             # (orphan blocks ...)
             # e.g. while doing ibd you get the tip of the real chain ...
             # this causes an exception right now ...
             if not is_tip:
-                chain, chain_index = self.create_branch(chain_index, height)
+                chain, chain_index = self.create_branch(chain_index, height, chain)
 
             # Add to the chain
             chain.append(block)
@@ -429,8 +438,10 @@ class Node:
                 except:
                     import traceback
                     logger.info(traceback.format_exc())
+                    return
 
             # Tell peers
+            # time.sleep(random.random())
             for peer in self.peers:
                 send_message(peer, "block", block)
 
@@ -440,6 +451,9 @@ class Node:
             # Sanity checks
             assert len(self.active_chain) == \
                    max([len(chain) for chain in self.chains])
+
+            for chain in self.chains:
+                assert len(set([block.id for block in chain])) == len(chain)
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -522,20 +536,27 @@ def mine_block(block, step=3):
 def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
-        coinbase = prepare_coinbase(public_key, len(node.active_chain) - 1)
-        logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
-        # logging.info([coinbase] + deepcopy(node.mempool))
-        unmined_block = Block(
-            txns=[coinbase] + deepcopy(node.mempool),
-            prev_id=node.active_chain[-1].id,
-        )
+        with chain_lock:
+            coinbase = prepare_coinbase(public_key, len(node.active_chain) - 1)
+            logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
+            # logging.info([coinbase] + deepcopy(node.mempool))
+            unmined_block = Block(
+                txns=[coinbase] + deepcopy(node.mempool),
+                prev_id=node.active_chain[-1].id,
+            )
         mined_block = mine_block(unmined_block)
         
         # This is False if mining was interrupted
         # Perhaps an exception would be wiser ...
         if mined_block:
-            logging.info(f"Mined a block w/ txns")
-            node.handle_block(mined_block)
+            logger.info("")
+            logger.info(f"Mined a block w/ txns")
+            # FIXME
+            try:
+                node.handle_block(mined_block)
+            except:
+                import traceback
+                logger.info(traceback.format_exc())
 
 
 ##############
@@ -637,12 +658,11 @@ def send_message(address, command, data, response=False, retries=3):
         try:
             s.connect(address)
             s.sendall(serialize(message))
-
             if response:
                 return deserialize(s.recv(5000))
         except:
             logger.info("retrying")
-            time.sleep(0.01)
+            time.sleep(.1)
             return send_message(address, command, data, response, 
                          retries=retries-1)
             
@@ -691,7 +711,11 @@ def main(args):
 
         # Join the network
         peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
-        node.join_network(peers)
+        # first one will fail b/c no peers yet. 
+        try:
+            node.join_network(peers)
+        except:
+            pass
 
         # Do initial block download
         logger.info("starting ibd")
