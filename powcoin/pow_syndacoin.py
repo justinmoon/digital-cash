@@ -12,25 +12,20 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random
 
 from docopt import docopt
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import user_private_key, user_public_key, bank_private_key, bank_public_key, airdrop_tx
+from identities import user_private_key, user_public_key, node_public_key
 
 
-NUM_BANKS = 3
-BLOCK_TIME = 5   # in seconds
 PORT = 10000
-bank = None
+node = None
 
-logging.basicConfig(
-    level="INFO",
-    format='%(asctime)-15s %(levelname)s %(message)s',
-)
+logging.basicConfig(level="INFO", format="%(threadName)-6s | %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -80,37 +75,28 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, txns, timestamp=None, signature=None):
-        if timestamp == None:
-            timestamp = time.time()
-        self.timestamp = timestamp
-        self.signature = signature
+    def __init__(self, txns, prev_id, nonce=0):
         self.txns = txns
+        self.prev_id = prev_id
+        self.nonce = nonce
 
     @property
-    def message(self):
-        return serialize([self.timestamp, self.txns])
+    def id(self):
+        return mining_hash(self.header(self.nonce))
 
-    def sign(self, private_key):
-        self.signature = private_key.sign(self.message)
+    def header(self, nonce):
+        return serialize([self.txns, self.prev_id, nonce])
 
-class Bank:
+    def __repr__(self):
+        return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
 
-    def __init__(self, id, private_key):
-        self.id = id
+class Node:
+
+    def __init__(self):
         self.blocks = []
         self.utxo_set = {}
         self.mempool = []
-        self.private_key = private_key
         self.peer_addresses = {(p, PORT) for p in os.environ.get('PEERS', '').split(',') if p}
-
-    @property
-    def next_id(self):
-        return len(self.blocks) % NUM_BANKS
-
-    @property
-    def our_turn(self):
-        return self.id == self.next_id
 
     @property
     def mempool_outpoints(self):
@@ -162,62 +148,35 @@ class Bank:
         # Check no value created or destroyed
         assert in_sum == out_sum
 
+    def validate_block(self, block):
+        assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
+        assert block.prev_id == self.blocks[-1].id
+
     def handle_tx(self, tx):
         self.validate_tx(tx)
         self.mempool.append(tx)
 
     def handle_block(self, block):
-        # Genesis block has no signature
-        if len(self.blocks) > 0:
-            public_key = bank_public_key(self.next_id)
-            public_key.verify(block.signature, block.message)
+        with chain_lock:
+            # Check the proof-of-work
+            self.validate_block(block)
 
-        # Check the transactions are valid
-        for tx in block.txns:
-            self.validate_tx(tx)
+            # Check the transactions are valid
+            for tx in block.txns:
+                self.validate_tx(tx)
 
-        # If they're all good, update self.blocks and self.utxo_set
-        for tx in block.txns:
-            self.update_utxo_set(tx)
-        
-        # Add the block and increment the id of bank who will report next block
-        self.blocks.append(block)
+            # If they're all good, update self.blocks and self.utxo_set
+            for tx in block.txns:
+                self.update_utxo_set(tx)
+            
+            # Add the block and increment the id of bank who will report next block
+            self.blocks.append(block)
 
-        # Schedule submisison of next block
-        self.schedule_next_block()
+            logging.info(f"Block accepted: id={block.id} height={len(self.blocks) - 1} txns={len(block.txns)}")
 
-    def make_block(self):
-        # Reset mempool
-        txns = deepcopy(self.mempool)
-        self.mempool = []
-        block = Block(txns=txns)
-        block.sign(self.private_key)
-        return block
-
-    def submit_block(self):
-        # Make the block
-        block = self.make_block()
-
-        # Save locally
-        self.handle_block(block)
-
-        # Tell peers
-        for address in self.peer_addresses:
-            send_message(address, "block", block)
-
-    def schedule_next_block(self):
-        if self.our_turn:
-            threading.Timer(5, self.submit_block, []).start()
-
-    def airdrop(self, tx):
-        assert len(self.blocks) == 0
-
-        # Update utxo set
-        self.update_utxo_set(tx)
-
-        # Update blockchain
-        block = Block(txns=[tx])
-        self.blocks.append(block)
+            # Tell peers
+            for peer in self.peer_addresses:
+                send_message(peer, "block", block)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -249,6 +208,66 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 
     return tx
 
+##########
+# Mining #
+##########
+
+BITS = 20
+POW_TARGET = 2 ** (256 - BITS)
+
+mining_interrupt = threading.Event()
+chain_lock = threading.Lock()
+
+def mining_hash(s):
+    if not isinstance(s, bytes):
+        s = s.encode()
+    return hashlib.sha256(s).hexdigest()
+
+
+def mine_block(block, nonce=None, step=None):
+    if nonce is None:
+        nonce = random.randint(0, 1000)
+    if step is None:
+        step = random.randint(0, 1000)
+    # FIXME: make this line more readable
+    while int(mining_hash(block.header(nonce)), 16) >= POW_TARGET:
+        nonce += step  # Hack to make mining more competitive
+        if mining_interrupt.is_set():
+            logger.info("Mining interrupted")
+            mining_interrupt.clear()
+            return
+    block.nonce = nonce
+    return block
+
+
+def mine_forever(public_key):
+    logging.info("Starting miner")
+    while True:
+        with chain_lock:
+            # coinbase = pcrepare_coinbase(public_key, len(node.active_chain) - 1)
+            logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
+            # logging.info([coinbase] + deepcopy(node.mempool))
+            unmined_block = Block(
+                txns=deepcopy(node.mempool),
+                prev_id=node.blocks[-1].id,
+            )
+        mined_block = mine_block(unmined_block)
+        
+        # This is False if mining was interrupted
+        # Perhaps an exception would be wiser ...
+        if mined_block:
+            logger.info("")
+            logger.info(f"Mined block {mined_block}")
+            # FIXME
+            try:
+                node.handle_block(mined_block)
+            except:
+                import traceback
+                logger.info(traceback.format_exc())
+
+##############
+# Networking #
+##############
 
 def prepare_message(command, data):
     return {
@@ -274,17 +293,20 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "block":
-            bank.handle_block(data)
+            logger.info(f"received block: {data}")
+            if data.prev_id == node.blocks[-1].id:
+                node.handle_block(data)
+                mining_interrupt.set()
 
         if command == "tx":
-            bank.handle_tx(data)
+            node.handle_tx(data)
 
         if command == "balance":
-            balance = bank.fetch_balance(data)
+            balance = node.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
         if command == "utxos":
-            utxos = bank.fetch_utxos(data)
+            utxos = node.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
 def external_address(node):
@@ -304,19 +326,37 @@ def send_message(address, command, data, response=False):
         if response:
             return deserialize(s.recv(5000))
 
+def mine_genesis_block():
+    unmined_genesis_block = Block(txns=[], prev_id=None)
+
+    # We hard-code nonce and step so everyone mines the same coinbase
+    mined_genesis_block = mine_block(unmined_genesis_block, nonce=0, step=1)
+
+    node.blocks.append(mined_genesis_block)
+    return node
+
 def main(args):
     if args["serve"]:
-        global bank
-        bank_id = int(os.environ["ID"])
-        bank = Bank(
-            id=bank_id,
-            private_key=bank_private_key(bank_id)
-        )
-        # Airdrop starting balances
-        bank.airdrop(airdrop_tx())
-        # Start producing blocks
-        bank.schedule_next_block()
-        serve()
+        # For logging purposes, rename main thread
+        threading.current_thread().name = "main"
+
+        global node
+        node = Node()
+
+        # Mine the genesis block
+        mine_genesis_block()
+
+        # First thing, start server in one thread thread
+        server_thread = threading.Thread(target=serve, name="server")
+        server_thread.start()
+
+        # First thing, start miner in one thread thread
+        logger.info("starting miner")
+        node_id = int(os.environ["ID"])
+        mining_public_key = node_public_key(node_id)
+        miner_thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
+        miner_thread.start()
+
     elif args["ping"]:
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
@@ -341,7 +381,7 @@ def main(args):
         # Prepare transaction
         tx = prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
-        # send to bank
+        # send to node
         send_message(address, "tx", tx)
     else:
         print("Invalid command")

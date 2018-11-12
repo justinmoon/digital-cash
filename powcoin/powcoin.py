@@ -725,8 +725,8 @@ def main(args):
         logger.info("starting miner")
         node_id = int(os.environ["ID"])
         mining_public_key = node_public_key(node_id)
-        thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
-        thread.start()
+        miner_thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
+        miner_thread.start()
 
     elif args["ping"]:
         address = address_from_host(args["--node"])
