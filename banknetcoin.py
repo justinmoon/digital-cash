@@ -141,10 +141,12 @@ class TCPHandler(socketserver.BaseRequestHandler):
         return self.request.sendall(serialize(response))
 
     def handle(self):
-        message_bytes = self.request.recv(1000).strip()
+        message_bytes = self.request.recv(5000).strip()
+        print(message_bytes)
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
+        print(command)
 
         if command == "ping":
             self.respond(command="pong", data="")
@@ -164,8 +166,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
-
-HOST, PORT = 'localhost', 9002
+HOST, PORT = 'localhost', 9006
 ADDRESS = (HOST, PORT)
 bank = Bank()
 

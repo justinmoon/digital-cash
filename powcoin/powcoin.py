@@ -372,7 +372,6 @@ class Node:
             if tx in self.mempool:
                 self.mempool.remove(tx)
                 logging.info(f"Removed tx from mempool")
-        
 
         # Sanity check
         prev_id = self.active_chain[0].id

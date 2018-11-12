@@ -36,3 +36,31 @@ def node_public_key(id):
     """Returns public key of a block producer given their ID"""
     private_key = node_private_key(id)
     return private_key.get_verifying_key()
+
+
+def bank_private_key(id):
+    assert isinstance(id, int)
+    assert id >= 0
+    base = 1000  # So bank keys don't collide with user keys ...
+    return SigningKey.from_secret_exponent(base + id, curve=SECP256k1)
+
+def bank_public_key(id):
+    """Returns public key of a block producer given their ID"""
+    private_key = bank_private_key(id)
+    return private_key.get_verifying_key()
+
+
+def airdrop_tx():
+    import uuid
+    from pow_syndacoin import TxOut, Tx
+    id = "1"
+    tx = Tx(
+        id=id, 
+        tx_ins=[], 
+        tx_outs=[
+            TxOut(tx_id=id, index=0, amount=500_000, public_key=bob_public_key), 
+            TxOut(tx_id=id, index=1, amount=500_000, public_key=alice_public_key),
+        ],
+    )
+    return tx
+
