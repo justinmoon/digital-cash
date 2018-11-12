@@ -1,17 +1,18 @@
 import time
-from hashlib import sha256
+import hashlib
 
 
-def proof_of_work(header, target):
+def get_proof(header, nonce):
+    preimage = f"{header}:{nonce}".encode()
+    proof_hex = hashlib.sha256(preimage).hexdigest()
+    return int(proof_hex, 16)
+
+
+def mine(header, target):
     nonce = 0
-    while True:
-        preimage = f"{header}:{nonce}".encode()
-        proof_str = sha256(preimage).hexdigest()
-        proof = int(proof_str, 16)
-        # Do we hit the target?
-        if proof < target:
-            return proof, nonce
+    while get_proof(header, nonce) >= target:
         nonce += 1
+    return nonce
 
 def mining_demo(header):
     previous_nonce = nonce = 0
@@ -23,8 +24,10 @@ def mining_demo(header):
         target = 2 ** (256 - difficulty_bits)
 
         start_time = time.time()
-        proof, nonce = proof_of_work(header, target)
+        nonce = mine(header, target)
         elapsed_time = time.time() - start_time
+
+        proof = get_proof(header, nonce)
 
         target_str = f"{target:.0e}"
         elapsed_time_str = f"{elapsed_time:.0e}" if nonce != previous_nonce else ""

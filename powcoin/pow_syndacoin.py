@@ -82,10 +82,15 @@ class Block:
 
     @property
     def id(self):
-        return mining_hash(self.header(self.nonce))
+        return hashlib.sha256(self.header).hexdigest()
 
-    def header(self, nonce):
-        return serialize([self.txns, self.prev_id, nonce])
+    @property
+    def header(self):
+        return serialize([self.txns, self.prev_id, self.nonce])
+
+    @property
+    def proof(self):
+        return int(self.id, 16)
 
     def __repr__(self):
         return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
@@ -172,7 +177,7 @@ class Node:
             # Add the block and increment the id of bank who will report next block
             self.blocks.append(block)
 
-            logging.info(f"Block accepted: id={block.id} height={len(self.blocks) - 1} txns={len(block.txns)}")
+            logging.info(f"Block accepted: height={len(self.blocks) - 1}")
 
             # Tell peers
             for peer in self.peer_addresses:
@@ -218,25 +223,15 @@ POW_TARGET = 2 ** (256 - BITS)
 mining_interrupt = threading.Event()
 chain_lock = threading.Lock()
 
-def mining_hash(s):
-    if not isinstance(s, bytes):
-        s = s.encode()
-    return hashlib.sha256(s).hexdigest()
 
-
-def mine_block(block, nonce=None, step=None):
-    if nonce is None:
-        nonce = random.randint(0, 1000)
-    if step is None:
-        step = random.randint(0, 1000)
-    # FIXME: make this line more readable
-    while int(mining_hash(block.header(nonce)), 16) >= POW_TARGET:
-        nonce += step  # Hack to make mining more competitive
+def mine_block(block, rand_step=True):
+    step = random.randint(0, 1000) if rand_step else 1
+    while block.proof >= POW_TARGET:
+        block.nonce += step
         if mining_interrupt.is_set():
             logger.info("Mining interrupted")
             mining_interrupt.clear()
             return
-    block.nonce = nonce
     return block
 
 
@@ -244,26 +239,18 @@ def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
         with chain_lock:
-            # coinbase = pcrepare_coinbase(public_key, len(node.active_chain) - 1)
-            logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
-            # logging.info([coinbase] + deepcopy(node.mempool))
             unmined_block = Block(
-                txns=deepcopy(node.mempool),
+                txns=node.mempool,
                 prev_id=node.blocks[-1].id,
+                nonce=random.randint(0, 1000),
             )
         mined_block = mine_block(unmined_block)
         
         # This is False if mining was interrupted
-        # Perhaps an exception would be wiser ...
         if mined_block:
             logger.info("")
-            logger.info(f"Mined block {mined_block}")
-            # FIXME
-            try:
-                node.handle_block(mined_block)
-            except:
-                import traceback
-                logger.info(traceback.format_exc())
+            logger.info(f"Mined block")
+            node.handle_block(mined_block)
 
 ##############
 # Networking #
@@ -293,7 +280,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "block":
-            logger.info(f"received block: {data}")
+            # If it extends the tip
             if data.prev_id == node.blocks[-1].id:
                 node.handle_block(data)
                 mining_interrupt.set()
@@ -330,7 +317,7 @@ def mine_genesis_block():
     unmined_genesis_block = Block(txns=[], prev_id=None)
 
     # We hard-code nonce and step so everyone mines the same coinbase
-    mined_genesis_block = mine_block(unmined_genesis_block, nonce=0, step=1)
+    mined_genesis_block = mine_block(unmined_genesis_block, rand_step=False)
 
     node.blocks.append(mined_genesis_block)
     return node
