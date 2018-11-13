@@ -24,6 +24,7 @@ class TxIn:
 
     @property
     def spend_message(self):
+        # FIXME missing recipient public key
         return f"{self.tx_id}:{self.index}".encode()
 
     @property
@@ -45,6 +46,8 @@ class TxOut:
 class Bank:
 
     def __init__(self):
+        # (tx_id, index) -> TxOut (public_key)
+        # (tx_id, index) -> public_key (lock)
         self.utxo = {}
 
     def update_utxo(self, tx):
@@ -64,24 +67,22 @@ class Bank:
         return tx
 
     def validate_tx(self, tx):
+        # inputs == outputs
         in_sum = 0
         out_sum = 0
         for tx_in in tx.tx_ins:
-            assert tx_in.outpoint in self.utxo
+            amount = tx_out.amount
+            in_sum += amount
+        for tx_out in tx.tx_outs:
+            out_sum += tx_out.amount
+        assert in_sum == out_sum
 
+        # check signatures
+        for tx_in in tx.tx_ins:
             tx_out = self.utxo[tx_in.outpoint]
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
             public_key.verify(tx_in.signature, tx_in.spend_message)
-
-            # Sum up the total inputs
-            amount = tx_out.amount
-            in_sum += amount
-
-        for tx_out in tx.tx_outs:
-            out_sum += tx_out.amount
-
-        assert in_sum == out_sum
 
     def handle_tx(self, tx):
         # Save to self.utxo if it's valid
