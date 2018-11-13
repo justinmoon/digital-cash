@@ -12,7 +12,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random
 
 from docopt import docopt
 from copy import deepcopy
@@ -25,10 +25,7 @@ from identities import user_private_key, user_public_key
 PORT = 10000
 node = None
 
-logging.basicConfig(
-    level="INFO",
-    format='%(asctime)-15s %(levelname)s %(message)s',
-)
+logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -162,11 +159,11 @@ class Node:
 
     def validate_block(self, block):
         assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
-        assert block.prev_id == self.block[-1].id
+        assert block.prev_id == self.blocks[-1].id
 
     def handle_block(self, block):
         # Check work, chain ordering
-        self.validate_block()
+        self.validate_block(block)
 
         # Check the transactions are valid
         for tx in block.txns:
@@ -179,7 +176,7 @@ class Node:
         # Add the block to our chain
         self.blocks.append(block)
 
-        logger.info(f"Block accepted: height={len(self.block) - 1}")
+        logger.info(f"Block accepted: height={len(self.blocks) - 1}")
 
         # Block propogation
         for peer_address in self.peer_addresses:
@@ -238,7 +235,7 @@ def mine_forever():
     while True:
         unmined_block = Block(
             txns=node.mempool,
-            prev_id=node.block[-1].id,
+            prev_id=node.blocks[-1].id,
             nonce=random.randint(0, 1000000000),
         )
         mined_block = mine_block(unmined_block)
@@ -252,7 +249,7 @@ def mine_genesis_block():
     global node
     unmined_block = Block(txns=[], prev_id=None, nonce=0)
     mined_block = mine_block(unmined_block)
-    node.block.append(mined_block)
+    node.blocks.append(mined_block)
     # TODO: update utxo set, award coinbase, etc
 
 
@@ -306,6 +303,7 @@ def external_address(node):
     return ('localhost', port)
 
 def serve():
+    logger.info("Starting server")
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
