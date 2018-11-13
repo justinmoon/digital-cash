@@ -1,11 +1,11 @@
 """
-BlockCoin
+POW Syndacoin
 
 Usage:
-  blockcoin.py serve
-  blockcoin.py ping [--node <node>]
-  blockcoin.py tx <from> <to> <amount> [--node <node>]
-  blockcoin.py balance <name> [--node <node>]
+  pow_syndacoin.py.py serve
+  pow_syndacoin.py.py ping [--node <node>]
+  pow_syndacoin.py.py tx <from> <to> <amount> [--node <node>]
+  pow_syndacoin.py.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
