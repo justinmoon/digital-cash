@@ -103,15 +103,17 @@ class Node:
         self.mempool = []
         # FIXME ugly
         self.address = (f"node{os.environ['ID']}", PORT)
-        self.peer_addresses = set()
+        self.peers = set()
         self.syncing = False
 
     def join_network(self, peers):
         for peer in peers:
-            try:
-                send_message(peer, "join", self.address)
-            except:
-                continue
+            if peer not in self.peers and peer != self.address:
+                try:
+                    send_message(peer, "join", None)
+                except:
+                    logger.info(f'Peer "{peer} offline"')
+                    continue
 
     @property
     def mempool_outpoints(self):
@@ -189,14 +191,14 @@ class Node:
         logger.info(f"Block accepted: height={len(self.blocks) - 1}")
 
         # Block propogation
-        for peer_address in self.peer_addresses:
-            send_message(peer_address, "block", block)
+        for peer in self.peers:
+            send_message(peer, "block", block)
 
     def initial_block_download(self):
         # just talk to one peer for now
-        if self.peer_addresses:
-            peer_address = next(iter(self.peer_addresses))
-            send_message(peer_address, "get_blocks", self.blocks[-1].id)
+        if self.peers:
+            peer = next(iter(self.peers))
+            send_message(peer, "get_blocks", self.blocks[-1].id)
         else:
             logger.info("(ibd) no peers")
 
@@ -283,38 +285,54 @@ def prepare_message(command, data):
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
-    def get_peer_address(self):
+    def get_canonical_peer_address(self):
         address = self.client_address[0]
-        raw_host_info = socket.gethostbyaddr(address)
-        hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+        try:
+            raw_host_info = socket.gethostbyaddr(address)
+            hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+        except:
+            hostname = address
         return (hostname, PORT)
+
 
     def respond(self, command, data):
         response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
 
     def handle(self):
+        peer = self.get_canonical_peer_address()
         message_bytes = self.request.recv(1024*4).strip()
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
 
-        logger.info(f"received {command}")
-
-        if command == "ping":
-            self.respond(command="pong", data="")
+        # logger.info(f"received {command}")
 
         if command == "join":
             # Accept the connection. Add them to our list of peers
-            node.peer_addresses.add(data)
-            send_message(self.get_peer_address(), "join-response", None)
+            node.peers.add(peer)
+            logger.info(f'Now connected to {peer[0]}"')
+            send_message(peer, "join-response", None)
 
         if command == "join-response":
-            node.peer_addresses.add(self.get_peer_address())
+            node.peers.add(peer)
+            logger.info(f'Now connected to {peer[0]}"')
+            # Request the peer's peers
+            send_message(peer, "peers", None)
+
+        assert peer in node.peers, \
+                "rejecting message from unconnected peer"
 
         if command == "peers":
-            # FIXME
-            logger.info("received peer list")
+            send_message(peer, "peers-response", node.peers)
+
+        if command == "peers-response":
+            node.join_network(data)
+            logger.info(f"received peers: {data}")
+
+        # Non-handshake messages require authentication
+        if command == "ping":
+            self.respond(command="pong", data="")
 
         if command == "block":
             if data == None:
@@ -340,7 +358,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     next_block = block
                     break
 
-            send_message(self.get_peer_address(), command="block", data=next_block)
+            send_message(peer, command="block", data=next_block)
             logger.info(f"continue ibd")
 
         if command == "tx":
@@ -379,6 +397,8 @@ def send_message(address, command, data, response=False):
 
 def main(args):
     if args["serve"]:
+        threading.current_thread().name = "main"
+
         global node
         node = Node()
 
@@ -397,14 +417,14 @@ def main(args):
         # Join the network
         peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
 
-        while not node.peer_addresses:
-            try:
-                node.join_network(peers)
-            except:
-                # Peer not online yet
-                pass
-            logger.info("waiting for connections")
-            time.sleep(.5)
+        try:
+            node.join_network(peers)
+        except:
+            # Peer not online yet
+            pass
+
+        # time for responses
+        time.sleep(1)
 
         # Do initial block download
         logger.info("starting ibd")
@@ -412,7 +432,7 @@ def main(args):
         node.initial_block_download()
         
         while node.syncing:
-            time.sleep(.5)
+            time.sleep(1)
 
         # Start miner thread
         miner_thread = threading.Thread(target=mine_forever, name="miner")
