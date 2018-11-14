@@ -9,7 +9,7 @@ services:
         - "10000:10000"
     environment:
       PEERS: 'node1,node2'
-      ID: 0
+      ME: 'node0'
 
   node1:
     image: powcoin
@@ -17,7 +17,7 @@ services:
         - "10001:10000"
     environment:
       PEERS: 'node0'
-      ID: 1
+      ME: 'node1'
 
   node2:
     image: powcoin
@@ -25,5 +25,5 @@ services:
         - "10002:10000"
     environment:
       PEERS: 'node0'
-      ID: 2
+      ME: 'node2'
 

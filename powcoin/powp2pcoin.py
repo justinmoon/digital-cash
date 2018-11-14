@@ -97,12 +97,12 @@ class Block:
 
 class Node:
 
-    def __init__(self):
+    def __init__(self, address):
         self.blocks = []
         self.utxo_set = {}
         self.mempool = []
         # FIXME ugly
-        self.address = (f"node{os.environ['ID']}", PORT)
+        self.address = address
         self.peers = set()
         self.syncing = False
 
@@ -396,19 +396,21 @@ def send_message(address, command, data, response=False):
 #######
 
 def main(args):
+    logger.info(os.environ)
     if args["serve"]:
         threading.current_thread().name = "main"
 
         global node
-        node = Node()
+        hostname = os.environ['ME']
+        address = (hostname, PORT)
+        node = Node(address)
 
-        node_id = int(os.environ["ID"])
+        node_id = int(hostname[-1])
         duration = 10 * node_id
         time.sleep(duration)
         
         # TODO: mine genesis block
         mine_genesis_block()
-
 
         # Start server thread
         server_thread = threading.Thread(target=serve, name="server")
