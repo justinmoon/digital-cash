@@ -9,21 +9,21 @@ services:
         - "10000:10000"
     environment:
       PEERS: 'node1,node2'
-      ID: 0
+      ME: 'node0'
 
   node1:
     image: powcoin
     ports:
         - "10001:10000"
     environment:
-      PEERS: 'node0,node2'
-      ID: 1
+      PEERS: 'node0'
+      ME: 'node1'
 
   node2:
     image: powcoin
     ports:
         - "10002:10000"
     environment:
-      PEERS: 'node0,node1'
-      ID: 2
+      PEERS: 'node0'
+      ME: 'node2'
 
