@@ -67,22 +67,22 @@ class Bank:
         return tx
 
     def validate_tx(self, tx):
-        # inputs == outputs
         in_sum = 0
         out_sum = 0
         for tx_in in tx.tx_ins:
-            amount = tx_out.amount
-            in_sum += amount
-        for tx_out in tx.tx_outs:
-            out_sum += tx_out.amount
-        assert in_sum == out_sum
+            assert self.is_unspent(tx_in)
 
-        # check signatures
-        for tx_in in tx.tx_ins:
-            tx_out = self.utxo[tx_in.outpoint]
+            tx_out = self.txs[tx_in.tx_id].tx_outs[tx_in.index]
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
             public_key.verify(tx_in.signature, tx_in.spend_message)
+
+            # Sum up the total inputs
+            amount = tx_out.amount
+            in_sum += amount
+
+        for tx_out in tx.tx_outs:
+            out_sum += tx_out.amount
 
     def handle_tx(self, tx):
         # Save to self.utxo if it's valid
