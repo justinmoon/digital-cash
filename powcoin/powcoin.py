@@ -215,6 +215,11 @@ class Node:
                 amount=tx_out.amount, public_key=tx_out.public_key)
             self.utxo_set[utxo.outpoint] = utxo
 
+        # Remove from mempool
+        if tx in self.mempool:
+            self.mempool.remove(tx)
+            logging.info(f"Removed tx from mempool")
+
     def remove_tx_from_utxo_set(self, tx):
         # tx.tx_ins put back in self.utxo_set
         if not tx.is_coinbase:
@@ -226,6 +231,11 @@ class Node:
         for index in range(len(tx.tx_outs)):
             outpoint = (tx.id, index)
             del self.utxo_set[outpoint]
+
+        # Put it back in mempool
+        if tx not in self.mempool and not tx.is_coinbase:
+            self.mempool.append(tx)
+            logging.info(f"Added tx to mempool")
 
     def fetch_utxos(self, public_key):
         return [utxo for utxo in self.utxo_set.values() 
@@ -355,23 +365,6 @@ class Node:
                     block_index = chain.index(block)
                     self.chains[chain_index] = self.chains[chain_index][:block_index]
                     return
-
-        # Add rolled-back transactions to the mempool
-        for tx in rollback_txns:
-            if tx not in self.mempool and not tx.is_coinbase:
-                try:
-                    self.validate_tx(tx)
-                    self.mempool.append(tx)
-                except:
-                    # Kinda hacky, but this will reject coinbase txns
-                    logger.info("couldn't add back to mempool")
-                    continue
-
-        # Remove freshly synced transactions from mempool
-        for tx in sync_txns:
-            if tx in self.mempool:
-                self.mempool.remove(tx)
-                logging.info(f"Removed tx from mempool")
 
         # Sanity check
         prev_id = self.active_chain[0].id
