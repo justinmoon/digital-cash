@@ -70,7 +70,8 @@ class Bank:
         in_sum = 0
         out_sum = 0
         for tx_in in tx.tx_ins:
-            assert self.is_unspent(tx_in)
+            # TxIn spending an unspent output
+            assert tx_in.outpoint in self.utxo
 
             tx_out = self.txs[tx_in.tx_id].tx_outs[tx_in.index]
             # Verify signature using public key of TxOut we're spending
