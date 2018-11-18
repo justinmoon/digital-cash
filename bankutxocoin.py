@@ -69,11 +69,10 @@ class Bank:
     def validate_tx(self, tx):
         in_sum = 0
         out_sum = 0
-        for tx_in in tx.tx_ins:
-            # TxIn spending an unspent output
-            assert tx_in.outpoint in self.utxo
 
-            tx_out = self.txs[tx_in.tx_id].tx_outs[tx_in.index]
+        for tx_in in tx.tx_ins:
+            tx_out = self.utxo[tx_in.outpoint]
+
             # Verify signature using public key of TxOut we're spending
             public_key = tx_out.public_key
             public_key.verify(tx_in.signature, tx_in.spend_message)
