@@ -165,14 +165,6 @@ def txn_iterator(chain):
         (txn, block, height)
         for height, block in enumerate(chain) for txn in block.txns)
 
-def get_last_shared_block(chain_one, chain_two):
-    # FIXME bad name
-    # FIXME can we just use locate_block?
-    for height, (b1, b2) in enumerate(zip(chain_one, chain_two)):
-        if b1.id != b2.id:
-            return height - 1
-    return min(len(chain_one), len(chain_two)) - 1
-
 def total_work(chain):
     # FIXME
     return len(chain)
@@ -589,8 +581,7 @@ class Node:
             self.validate_tx(tx)
         except:
             logger.info(f"rejecting invalid tx: {tx}")
-            import traceback
-            logger.info(traceback.format_exc())
+            print_exc()
             return
 
         # Add to our mempool if it passes validation and isn't already there
@@ -607,97 +598,40 @@ class Node:
         for chain_index, chain in enumerate(chains):
             for height, block in enumerate(chain):
                 if block.id == block_id:
-                    is_tip = height == len(chain) - 1
-                    return chain, chain_index, height, is_tip
-        return None, None, None, None
-
-    def work_ordered_chains(self):
-        def key(chain):
-             is_active = self.chains.index(chain) == self.active_chain_index
-             return len(chain) + int(is_active)
-        return sorted(self.chains, key=key, reverse=True)
-
-    def sync_utxo_set(self, chain):
-
-        if self.active_chain_index != self.chains.index(chain):
-            logger.info(f"ACTIVE BRANCH CHANGE: {self.active_chain_index} -> {self.chains.index(chain)}")
-
-        # FIXME have to treat active chain separately 
-        # since it changes under our feet
-        if self.chains.index(chain) == self.active_chain_index:
-            sync_blocks = self.active_chain[-1:]
-            rollback_blocks = []
-        else:
-            rollback_blocks, sync_blocks = self.chain_diffs(chain)
-
-        # Roll active chain back until fork block
-        # No exception handling here b/c failure would mean program is broken
-        # Iterate backwards because we're rolling BACK
-        for block in rollback_blocks[::-1]:
-            self.disconnect_block(block)
-        
-        # Attempt to update the UTXO set
-        for index, block in enumerate(sync_blocks):
-            try:
-                self.connect_block(block)
-            except:
-                print_exc()
-                logger.info("Aborting reorg due to validation error")
-                # Undo (iterate in reverse) all blocks from sync_blocks
-                for block in sync_blocks[:index][::-1]:
-                    self.disconnect_block(block)
-
-                # Redo all blocks from sync_blocks 
-                for block in rollback_blocks:
-                    self.connect_block(block)
-                
-                chain_index = self.chains.index(chain)
-                block_index = chain.index(block)
-                self.chains[chain_index] = self.chains[chain_index][:block_index]
-                return
-
-        # Sanity check
-        # FIXME this is checking the old chain???
-        # perhaps we should reset the active_chain_index before doing this
-        prev_id = self.active_chain[0].id
-        for block in self.active_chain[1:]:
-            assert block.prev_id == prev_id
-            prev_id = block.id
-
-        # If everything worked update the "active chain"
-        # FIXME this doesn't really fit in this function ...
-        # This belongs in handle_block ...
-        self.active_chain_index = self.chains.index(chain)
+                    return chain, chain_index, height
+        return None, None, None
 
     def validate_block(self, block, check_txns=False):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
+        # Check txns
         if check_txns:
             self.validate_coinbase(block.txns[0])
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
 
-    def chain_diffs(self, to_chain):
-        """Calculate blocks unique to each chain"""
-        fork_height = get_last_shared_block(self.active_chain, to_chain)
-        rollback_blocks = self.active_chain[fork_height+1:]
-        sync_blocks = to_chain[fork_height+1:]
-        return rollback_blocks, sync_blocks
+    def create_branch(self):
+        self.branches.append([])
+        chain = self.branches[-1]
+        chain_index = len(self.branches)
+        height = 0
+        return chain, chain_index, height
 
     def handle_block(self, block):
         # Claim the lock
         with chain_lock:
             # see if it's new
-            chain, _, _, _ = self.locate_block(block.id)
+            chain, _, _ = self.locate_block(block.id)
             if chain:
                 # already know about it
                 raise Exception("already seen it")
 
+            # TODO from here up through the reorg belongs in connect_block
 
             # If this is a new fork, we need to create a new chain
             # FIXME we shouldn't call self.locate_block twice ...
-            chain, chain_index, height, is_tip = self.locate_block(block.prev_id)
+            chain, chain_index, height = self.locate_block(block.prev_id)
 
             # Validate the block
             # Validate transactions if we're adding to main chain
@@ -707,12 +641,10 @@ class Node:
             # (orphan blocks ...)
             # e.g. while doing ibd you get the tip of the real chain ...
             # this causes an exception right now ...
+            is_tip = height == len(chain) - 1
             if not is_tip:
-                # FIXME add a method for this
                 logger.info("creating branch")
-                self.branches.append([])
-                chain = self.branches[-1]
-                chain_index = len(self.branches)
+                chain, chain_index, height = self.create_branch()
 
             # Add to the chain
             chain.append(block)
@@ -723,7 +655,7 @@ class Node:
                 self.connect_block(block)
 
             # Attempt a reorg
-            self.reorg()
+            self.attempt_reorg()
 
             # Tell peers
             # time.sleep(random.random())
@@ -739,14 +671,12 @@ class Node:
             for chain in self.chains:
                 assert len(set([block.id for block in chain])) == len(chain)
 
-    def reorg(self):
-        reorged = False
-        frozen_side_branches = list(self.branches)  # May change during this call.
+    def attempt_reorg(self):
+        side_branches = list(self.branches)  # May change during this call.
 
-        for branch_idx, chain in enumerate(frozen_side_branches):
-            # fork_block, fork_idx, _, _ = locate_block(
-            _, chain_index, height, is_tip = \
-                    self.locate_block(chain[0].prev_id)
+        for branch_idx, chain in enumerate(side_branches):
+            #FIXME: use total_work()
+            _, chain_index, height = self.locate_block(chain[0].prev_id)
             active_height = len(self.active_chain)
             branch_height = len(chain) + height + 1 ## FIXME off by 1
 
@@ -754,52 +684,27 @@ class Node:
                 logger.info(
                         f'attempting reorg of idx {branch_idx} to active_chain: '
                         f'new height of {branch_height} (vs. {active_height})')
-                rollback_blocks = self.active_chain[height+1:]
-                sync_blocks = chain
-
-                # logger.info(f"disconnecting: {rollback_blocks}")
-                # logger.info(f"connecting: {sync_blocks}")
-
-                for block in rollback_blocks[::-1]:
-                    self.disconnect_block(block)
-                    self.active_chain.pop()  # FIXME
-                
-                self.branches.append(rollback_blocks)
-
-                # Attempt to update the UTXO set
-                for block in sync_blocks:
-                    logger.info("connecting")
-                    self.connect_block(block)
-                    self.active_chain.append(block)  # FIXME
-
-
-                # reorged |= try_reorg(chain, branch_idx, fork_idx)
-                # raise NotImplemented()
-
-        # return reorged
-
-
-            # if total_work(chain) > total_work(self.active_chain) or \
-                    # self.chains.index(chain) == self.active_chain_index:
-                # try:
-                    # self.sync_utxo_set(chain)
-                # except:
-                    # # FIXME: this is never reached
-                    # # sync_utxo_set catches exceptions
-                    # import traceback
-                    # logger.info(traceback.format_exc())
-                    # return
-
-
+                self.reorg(old_blocks=self.active_chain[height+1:],
+                           new_blocks=chain)
 
         # Sanity check
-        # FIXME this is checking the old chain???
         # perhaps we should reset the active_chain_index before doing this
         prev_id = self.active_chain[0].id
         for block in self.active_chain[1:]:
             assert block.prev_id == prev_id
             prev_id = block.id
 
+    def reorg(self, old_blocks, new_blocks):
+        # Disconnect old blocks
+        for block in old_blocks:
+            self.disconnect_block(block)
+            self.active_chain.pop()  # FIXME
+        self.branches.append(old_blocks)
+
+        # Connect new blocks
+        for block in new_blocks:
+            self.connect_block(block)
+            self.active_chain.append(block)  # FIXME
 
     def initial_block_download(self):
         # just talk to one peer for now
