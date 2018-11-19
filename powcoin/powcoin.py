@@ -481,7 +481,7 @@ class Node:
     def __init__(self, address):
         self.utxo_set = {}
         self.mempool = []
-        self.peers = set()
+        self.peers = []
         self.address = address
         self.syncing = False
         self.chain = []
@@ -490,6 +490,10 @@ class Node:
     def connect(self, peer):
         if peer not in self.peers and peer != self.address:
             send_message(peer, "connect", None)
+
+    def handle_peer(self, peer):
+        if peer not in self.peers:
+            node.peers.append(peer)
 
     def add_tx_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -672,8 +676,7 @@ class Node:
     def initial_block_download(self):
         # just talk to one peer for now
         # FIXME
-        if len(self.peers):
-            peer = next(iter(self.peers))
+        for peer in self.peers:
             send_message(peer, "get_blocks", self.chain[-1].id)
 
     def connect_block(self, block):
@@ -836,15 +839,15 @@ class TCPHandler(socketserver.BaseRequestHandler):
         data = message["data"]
 
         if command == "connect":
-            # Accept the connection. Add them to our list of peers
-            node.peers.add(peer)
+            node.handle_peer(peer)
             logger.info(f'Connected to {peer[0]}"')
             send_message(peer, "connect-response", None)
 
         if command == "connect-response":
-            node.peers.add(peer)
+            node.handle_peer(peer)
             logger.info(f'Connected to {peer[0]}"')
-            # Request the peer's peers
+
+            # Request their peers
             send_message(peer, "peers", None)
 
         assert peer in node.peers, \
@@ -854,7 +857,11 @@ class TCPHandler(socketserver.BaseRequestHandler):
             send_message(peer, "peers-response", node.peers)
 
         if command == "peers-response":
-            node.connect_network(data)
+            for peer in data:
+                try:
+                    node.connect(peer)
+                except:
+                    logger.info(f'Node "{peer[0]}" offline')
             logger.info(f"received peers: {data}")
 
         if command == "ping":
