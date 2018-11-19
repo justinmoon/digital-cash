@@ -627,32 +627,7 @@ class Node:
                 # already know about it
                 raise Exception("already seen it")
 
-            # TODO from here up through the reorg belongs in connect_block
-
-            # If this is a new fork, we need to create a new chain
-            # FIXME we shouldn't call self.locate_block twice ...
-            chain, chain_index, height = self.locate_block(block.prev_id)
-
-            # Validate the block
-            # Validate transactions if we're adding to main chain
-            self.validate_block(block, check_txns=chain_index==self.active_chain_index)
-
-            # FIXME: what to do if chain_index / height come back None???
-            # (orphan blocks ...)
-            # e.g. while doing ibd you get the tip of the real chain ...
-            # this causes an exception right now ...
-            is_tip = height == len(chain) - 1
-            if not is_tip:
-                logger.info("creating branch")
-                chain, chain_index, height = self.create_branch()
-
-            # Add to the chain
-            chain.append(block)
-
-            # If main chain was extended, update utxo set / mempool
-            if self.active_chain_index == chain_index:
-                logger.info(f"adding block to active chain {chain_index}")
-                self.connect_block(block)
+            self.connect_block(block)
 
             # Attempt a reorg
             self.attempt_reorg()
@@ -695,16 +670,14 @@ class Node:
             prev_id = block.id
 
     def reorg(self, old_blocks, new_blocks):
-        # Disconnect old blocks
+        # Disconnect old blocks and preserve them as a branch
         for block in old_blocks:
             self.disconnect_block(block)
-            self.active_chain.pop()  # FIXME
         self.branches.append(old_blocks)
 
         # Connect new blocks
         for block in new_blocks:
             self.connect_block(block)
-            self.active_chain.append(block)  # FIXME
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -714,12 +687,35 @@ class Node:
             send_message(peer, "get_blocks", self.active_chain[-1].id)
 
     def connect_block(self, block):
-        self.validate_block(block, check_txns=True)
+        # If this is a new fork, we need to create a new chain
+        # FIXME we shouldn't call self.locate_block twice ...
+        chain, chain_index, height = self.locate_block(block.prev_id)
 
-        for tx in block.txns:
-            self.add_tx_to_utxo_set(tx)
+        # Validate the block
+        # Validate transactions if we're adding to main chain
+        self.validate_block(block, check_txns=chain_index==self.active_chain_index)
+
+        # FIXME: what to do if chain_index / height come back None???
+        # (orphan blocks ...)
+        # e.g. while doing ibd you get the tip of the real chain ...
+        # this causes an exception right now ...
+        is_tip = height == len(chain) - 1
+        if not is_tip:
+            logger.info("creating branch")
+            chain, chain_index, height = self.create_branch()
+
+        # Add block to chain
+        chain.append(block)
+
+        # Update utxo set if we're 
+        extends_active_chain = self.active_chain_index == chain_index
+        if extends_active_chain:
+            self.validate_block(block, check_txns=True)
+            for tx in block.txns:
+                self.add_tx_to_utxo_set(tx)
 
     def disconnect_block(self, block):
+        self.active_chain.pop()  # FIXME
         for tx in block.txns:
             self.remove_tx_from_utxo_set(tx)
 
