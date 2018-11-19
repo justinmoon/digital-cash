@@ -478,27 +478,18 @@ def tx_in_to_utxo(tx_in, chain):
 
 class Node:
 
-    def __init__(self, node_id=None):
-        self.active_chain_index = 0
-        self.chains = []
+    def __init__(self, address):
         self.utxo_set = {}
         self.mempool = []
         self.peers = set()
-        self.address = (f"node{node_id}", PORT)
+        self.address = address
         self.syncing = False
+        self.chain = []
         self.branches = []
 
-    def join_network(self, peers):
-        for peer in peers:
-            response = send_message(peer, "join", self.address, response=True)
-
-            # Let's say a "None" response turns us down
-            if response is not None:
-                self.peers.add(peer)
-
-    @property
-    def active_chain(self):
-        return self.chains[self.active_chain_index]
+    def connect(self, peer):
+        if peer not in self.peers and peer != self.address:
+            send_message(peer, "connect", None)
 
     def add_tx_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -520,7 +511,7 @@ class Node:
         # tx.tx_ins put back in self.utxo_set
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
-                utxo = tx_in_to_utxo(tx_in, self.active_chain)
+                utxo = tx_in_to_utxo(tx_in, self.chain)
                 self.utxo_set[utxo.outpoint] = utxo
 
         # tx.tx_outs removed from utxo_set
@@ -594,7 +585,7 @@ class Node:
                 send_message(peer, "tx", tx)
 
     def locate_block(self, block_id):
-        chains = [self.active_chain] + self.branches
+        chains = [self.chain] + self.branches
         for chain_index, chain in enumerate(chains):
             for height, block in enumerate(chain):
                 if block.id == block_id:
@@ -606,6 +597,7 @@ class Node:
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
         # Check txns
+        # FIXME can i infer whether we should check txns?
         if check_txns:
             self.validate_coinbase(block.txns[0])
             for tx in block.txns[1:]:
@@ -633,18 +625,15 @@ class Node:
             self.attempt_reorg()
 
             # Tell peers
-            # time.sleep(random.random())
+            time.sleep(random.random())
             for peer in self.peers:
                 send_message(peer, "block", block)
 
             # FIXME
-            logging.info(f"Block accepted: chain={self.active_chain_index} height={len(self.active_chain) - 1} txns={len(block.txns)}")
+            logging.info(f"Block accepted: height={len(self.chain) - 1} txns={len(block.txns)}")
 
             # Sanity checks
-            assert len(self.active_chain) == \
-                   max([len(chain) for chain in self.chains])
-            for chain in self.chains:
-                assert len(set([block.id for block in chain])) == len(chain)
+            assert len(set([block.id for block in self.chain])) == len(self.chain)
 
     def attempt_reorg(self):
         side_branches = list(self.branches)  # May change during this call.
@@ -652,27 +641,28 @@ class Node:
         for branch_idx, chain in enumerate(side_branches):
             #FIXME: use total_work()
             _, chain_index, height = self.locate_block(chain[0].prev_id)
-            active_height = len(self.active_chain)
+            active_height = len(self.chain)
             branch_height = len(chain) + height + 1 ## FIXME off by 1
 
             if branch_height > active_height:
                 logger.info(
                         f'attempting reorg of idx {branch_idx} to active_chain: '
                         f'new height of {branch_height} (vs. {active_height})')
-                self.reorg(old_blocks=self.active_chain[height+1:],
+                self.reorg(old_blocks=self.chain[height+1:],
                            new_blocks=chain)
 
         # Sanity check
-        # perhaps we should reset the active_chain_index before doing this
-        prev_id = self.active_chain[0].id
-        for block in self.active_chain[1:]:
+        prev_id = self.chain[0].id
+        for block in self.chain[1:]:
             assert block.prev_id == prev_id
             prev_id = block.id
 
     def reorg(self, old_blocks, new_blocks):
-        # Disconnect old blocks and preserve them as a branch
+        # Disconnect old blocks 
         for block in old_blocks:
             self.disconnect_block(block)
+
+        # Preserve old blocks as a branch
         self.branches.append(old_blocks)
 
         # Connect new blocks
@@ -684,21 +674,21 @@ class Node:
         # FIXME
         if len(self.peers):
             peer = next(iter(self.peers))
-            send_message(peer, "get_blocks", self.active_chain[-1].id)
+            send_message(peer, "get_blocks", self.chain[-1].id)
 
     def connect_block(self, block):
-        # If this is a new fork, we need to create a new chain
-        # FIXME we shouldn't call self.locate_block twice ...
+        # Find the parent
         chain, chain_index, height = self.locate_block(block.prev_id)
+
+        # TODO: handle orphan blocks
 
         # Validate the block
         # Validate transactions if we're adding to main chain
-        self.validate_block(block, check_txns=chain_index==self.active_chain_index)
+        extends_chain = chain_index==0
+        self.validate_block(block, check_txns=extends_chain)
 
-        # FIXME: what to do if chain_index / height come back None???
-        # (orphan blocks ...)
-        # e.g. while doing ibd you get the tip of the real chain ...
-        # this causes an exception right now ...
+        # If previous block isn't the end of it's chain, create a new one
+        # FIXME: if this is false and we're off main chain, below fails
         is_tip = height == len(chain) - 1
         if not is_tip:
             logger.info("creating branch")
@@ -708,14 +698,12 @@ class Node:
         chain.append(block)
 
         # Update utxo set if we're 
-        extends_active_chain = self.active_chain_index == chain_index
-        if extends_active_chain:
-            self.validate_block(block, check_txns=True)
+        if extends_chain:
             for tx in block.txns:
                 self.add_tx_to_utxo_set(tx)
 
     def disconnect_block(self, block):
-        self.active_chain.pop()  # FIXME
+        self.chain.pop()  # FIXME
         for tx in block.txns:
             self.remove_tx_from_utxo_set(tx)
 
@@ -793,12 +781,12 @@ def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
         with chain_lock:
-            coinbase = prepare_coinbase(public_key, len(node.active_chain) - 1)
+            coinbase = prepare_coinbase(public_key, len(node.chain) - 1)
             logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
             # logging.info([coinbase] + deepcopy(node.mempool))
             unmined_block = Block(
                 txns=[coinbase] + deepcopy(node.mempool),
-                prev_id=node.active_chain[-1].id,
+                prev_id=node.chain[-1].id,
             )
         mined_block = mine_block(unmined_block)
         
@@ -827,10 +815,13 @@ def prepare_message(command, data):
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
-    def peer(self):
-        address = self.client_address[0]
-        raw_host_info = socket.gethostbyaddr(address)
-        hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+    def get_canonical_peer_address(self):
+        ip = self.client_address[0]
+        try:
+            hostname = socket.gethostbyaddr(ip)
+            hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+        except:
+            hostname = ip
         return (hostname, PORT)
 
     def respond(self, command, data):
@@ -838,10 +829,33 @@ class TCPHandler(socketserver.BaseRequestHandler):
         return self.request.sendall(serialize(response))
 
     def handle(self):
+        peer = self.get_canonical_peer_address()
         message_bytes = self.request.recv(1024*4).strip()
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
+
+        if command == "connect":
+            # Accept the connection. Add them to our list of peers
+            node.peers.add(peer)
+            logger.info(f'Connected to {peer[0]}"')
+            send_message(peer, "connect-response", None)
+
+        if command == "connect-response":
+            node.peers.add(peer)
+            logger.info(f'Connected to {peer[0]}"')
+            # Request the peer's peers
+            send_message(peer, "peers", None)
+
+        assert peer in node.peers, \
+                "rejecting message from unconnected peer"
+
+        if command == "peers":
+            send_message(peer, "peers-response", node.peers)
+
+        if command == "peers-response":
+            node.connect_network(data)
+            logger.info(f"received peers: {data}")
 
         if command == "ping":
             self.respond(command="pong", data="")
@@ -875,25 +889,17 @@ class TCPHandler(socketserver.BaseRequestHandler):
             utxos = node.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
-        if command == "join":
-            node.peers.add(data)
-            self.respond(command="peers", data=node.peers)
-            logger.info("received join msg")
-
-        if command == "peers":
-            logger.info("received peer list")
-
         if command == "get_blocks":
             next_block = None
             # locate the block in the main chain
             # FIXME: this should call a general-purpose function
-            for block in node.active_chain:
+            for block in node.chain:
                 if block.prev_id == data:
                     next_block = block
                     break
 
             # Says the IBD is done
-            send_message(self.peer(), command="block", data=next_block)
+            send_message(peer, command="block", data=next_block)
             logger.info(f"sent 'block' message: {next_block}")
 
 
@@ -931,15 +937,6 @@ def main(args):
     if args["serve"]:
         threading.current_thread().name = "main"
 
-        # FIXME: needs coinbase
-        # genesis_block = Block(
-            # txns=[],
-            # prev_id=None,
-            # nonce=0,
-        # )
-        # node.chains.append([genesis_block])
-        # node.active_chain_index = 0
-
         node_id = int(os.environ["ID"])
 
         duration = 5 * node_id
@@ -950,15 +947,15 @@ def main(args):
 
         # Set up the node (for convience, alice get coinbase coins)
         global node
-        node = Node(node_id=node_id)
+        address = (f"node{node_id}", PORT)
+        node = Node(address=address)
 
         # Insert coinbase
         # FIXME: this is a mess
         genesis_coinbase = prepare_coinbase(public_key=user_public_key("alice"), height=0)
         unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
         mined_genesis_block = mine_block(unmined_genesis_block, step=1)
-        node.chains.append([mined_genesis_block])
-        node.active_chain_index = 0
+        node.chain.append(mined_genesis_block)
         node.add_tx_to_utxo_set(genesis_coinbase)
 
         # First thing, start server in another thread
@@ -966,12 +963,12 @@ def main(args):
         server_thread.start()
 
         # Join the network
-        peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
-        # first one will fail b/c no peers yet. 
-        try:
-            node.join_network(peers)
-        except:
-            pass
+        peers = [(p, PORT) for p in os.environ['PEERS'].split(',')]
+        for peer in peers:
+            try:
+                node.connect(peer)
+            except:
+                logger.info(f'Node "{peer} offline"')
 
         # Do initial block download
         logger.info("starting ibd")
