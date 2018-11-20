@@ -36,8 +36,6 @@ PORT = 10000
 node = None
 chain_lock = threading.Lock()
 
-# logging.basicConfig(level="INFO", format="%(asctime)-15s %(levelname)s %(message)s")
-# logging.basicConfig(level="INFO", format="%(message)s")
 logging.basicConfig(level="DEBUG", format="%(threadName)-6s | %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -596,6 +594,13 @@ class Node:
                     return chain, chain_index, height
         return None, None, None
 
+    def create_branch(self):
+        self.branches.append([])
+        chain = self.branches[-1]
+        chain_index = len(self.branches)
+        height = 0
+        return chain, chain_index, height
+
     def validate_block(self, block, check_txns=False):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
@@ -607,21 +612,12 @@ class Node:
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
 
-    def create_branch(self):
-        self.branches.append([])
-        chain = self.branches[-1]
-        chain_index = len(self.branches)
-        height = 0
-        return chain, chain_index, height
-
     def handle_block(self, block):
         # Claim the lock
         with chain_lock:
-            # see if it's new
-            chain, _, _ = self.locate_block(block.id)
-            if chain:
-                # already know about it
-                raise Exception("already seen it")
+            # Ignore if we've already seen it
+            if self.locate_block(block.id)[0]:
+                raise Exception("Duplicate block")
 
             self.connect_block(block)
 
@@ -653,7 +649,7 @@ class Node:
                         f'attempting reorg of idx {branch_idx} to active_chain: '
                         f'new height of {branch_height} (vs. {active_height})')
                 self.reorg(old_blocks=self.chain[height+1:],
-                           new_blocks=chain)
+                           new_blocks=chain, branch_index=branch_idx)
 
         # Sanity check
         prev_id = self.chain[0].id
@@ -661,8 +657,9 @@ class Node:
             assert block.prev_id == prev_id
             prev_id = block.id
 
-    def reorg(self, old_blocks, new_blocks):
+    def reorg(self, old_blocks, new_blocks, branch_index):
         # Disconnect old blocks 
+        # FIXME think it would be more intuitive to reverse old_blocks here...
         for block in old_blocks:
             self.disconnect_block(block)
 
@@ -671,7 +668,19 @@ class Node:
 
         # Connect new blocks
         for block in new_blocks:
-            self.connect_block(block)
+            try:
+                self.connect_block(block)
+            except:
+                logger.info(f"Reorg failed due to validation error {block.id}")
+
+                # Remove bad block and children from branches
+                branch = self.branches[branch_index]
+                self.branches[branch_index] = branch[:branch.index(block)]
+                
+                # Rollback
+                ob = new_blocks[:new_blocks.index(block)][::-1]
+                nb = old_blocks[::-1]
+                return self.reorg(ob, nb, branch_index=branch_index)
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -683,22 +692,22 @@ class Node:
         # Find the parent
         chain, chain_index, height = self.locate_block(block.prev_id)
 
-        # TODO: handle orphan blocks
-
         # Validate the block
         # Validate transactions if we're adding to main chain
-        extends_chain = chain_index==0
+        is_tip = height == len(chain) - 1
+        main_chain = chain_index == 0  # FIXME explain this magic number
+        extends_chain = main_chain and is_tip
         self.validate_block(block, check_txns=extends_chain)
 
         # If previous block isn't the end of it's chain, create a new one
         # FIXME: if this is false and we're off main chain, below fails
-        is_tip = height == len(chain) - 1
         if not is_tip:
-            logger.info("creating branch")
             chain, chain_index, height = self.create_branch()
+            logger.info(f"Creating branch #{len(self.branches)}")
 
         # Add block to chain
         chain.append(block)
+        logger.info(f"Extending chain #{chain_index}")
 
         # Update utxo set if we're 
         if extends_chain:

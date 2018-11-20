@@ -2,9 +2,9 @@ from powcoin import *
 from pprint import pprint
 import identities as ids
 
-node = Node()
-alice_node = Node()
-bob_node = Node()
+node = Node("x")
+alice_node = Node("x")
+bob_node = Node("x")
 
 def send_tx(n, sender_private_key, recipient_public_key, amount):
     utxos = n.fetch_utxos(sender_private_key.get_verifying_key())
@@ -21,8 +21,7 @@ mined_genesis_block = mine_block(unmined_genesis_block)
 # FIXME HACK
 print("Genesis mined")
 for n in [node, alice_node, bob_node]:
-    n.chains.append([mined_genesis_block])
-    n.active_chain_index = 0
+    n.chain.append(mined_genesis_block)
     n.add_tx_to_utxo_set(genesis_coinbase)
 print(mined_genesis_block)
 print()
@@ -71,11 +70,38 @@ alice_node.handle_block(alice_fork_block)
 print(alice_fork_block)
 print()
 
-assert node.active_chain == [
+assert node.chain == [
     mined_genesis_block,
     first_mined_block,
     bob_fork_block,
 ]
+
+#################################################
+# Alice triggers reorg attempt with a bad block #
+#################################################
+
+old_chain = list(node.chain)
+
+print("Alice's bad second fork block:") 
+coinbase = prepare_coinbase(ids.alice_public_key, height=3)
+bob_to_alice = send_tx(alice_node, ids.bob_private_key, ids.alice_public_key, 10)
+# FIXME: badsignatureerror is bad example b/c this can be checked w/o utxo db
+bob_to_alice.tx_outs[0].amount = 100000
+unmined_block = Block(txns=[coinbase, bob_to_alice], 
+                      prev_id=alice_fork_block.id)
+alice_second_fork_block = mine_block(unmined_block)
+node.handle_block(alice_second_fork_block)
+print(alice_second_fork_block)
+print()
+
+
+# Assert chain is unchanged
+assert node.chain == [
+    mined_genesis_block,
+    first_mined_block,
+    bob_fork_block,
+]
+assert node.chain == old_chain
 
 ###################################################################
 # Again, they both mine next block. Node discover's Alice's first #
@@ -84,13 +110,6 @@ assert node.active_chain == [
 # Alice's
 print("Alice's second fork block:")
 
-print("\nFirst chain")
-pprint([i[0] for i in txn_iterator(node.chains[0])])
-print("\nSecond chain")
-pprint([i[0] for i in txn_iterator(node.chains[1])])
-print("\nUTXO")
-pprint(node.utxo_set)
-print()
 
 coinbase = prepare_coinbase(ids.alice_public_key, height=3)
 bob_to_alice = send_tx(alice_node, ids.bob_private_key, ids.alice_public_key, 10)
@@ -101,6 +120,15 @@ node.handle_block(alice_second_fork_block)
 alice_node.handle_block(alice_second_fork_block)
 print(alice_second_fork_block)
 print()
+
+expected = [
+    mined_genesis_block,
+    first_mined_block,
+    alice_fork_block,
+    alice_second_fork_block,
+]
+assert node.chain == expected
+
 
 # Bob's
 print("Bob's second fork block:")
@@ -120,15 +148,7 @@ expected = [
     alice_fork_block,
     alice_second_fork_block,
 ]
-# from pprint import pprint
-# print("chains")
-# pprint(node.chains)
-# print("active chain")
-# pprint(node.active_chain)
-# print("expected")
-# pprint(expected)
-
-assert node.active_chain == expected
+assert node.chain == expected
 
 #################################
 # Alice attempts a double-spend #
@@ -138,7 +158,7 @@ print("Alice's double-spend:")
 
 # Collect initial data
 alice_starting_balance = node.fetch_balance(ids.alice_public_key)
-starting_chain_height = len(node.active_chain) - 1
+starting_chain_height = len(node.chain) - 1
 
 # Attempt the double-spend
 coinbase = prepare_coinbase(ids.alice_public_key, height=4)
@@ -153,7 +173,7 @@ except:
 
 # Collect final data
 alice_ending_balance = node.fetch_balance(ids.alice_public_key)
-ending_chain_height = len(node.active_chain) - 1
+ending_chain_height = len(node.chain) - 1
 
 # Assert that the block wasn't accepted, Alice's balance didn't change
 assert alice_starting_balance == alice_ending_balance
