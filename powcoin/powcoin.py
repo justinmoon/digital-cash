@@ -492,6 +492,10 @@ class Node:
         if peer not in self.peers:
             node.peers.append(peer)
 
+    def initial_block_download(self):
+        for peer in self.peers:
+            send_message(peer, "get_blocks", self.chain[-1].id)
+
     def add_to_utxo_set(self, tx):
         # Remove utxos that were just spent
         if not tx.is_coinbase:
@@ -636,8 +640,7 @@ class Node:
 
     def attempt_reorg(self):
         side_branches = list(self.branches)  # May change during this call.
-
-        for branch_index, branch in enumerate(side_branches):
+        for branch_index, branch in enumerate(self.branches):
             # Compare branch with blocks on self.chain since fork
             _, _, fork_height = self.locate_block(branch[0].prev_id)
             blocks_after_fork = self.chain[fork_height+1:]
@@ -658,7 +661,7 @@ class Node:
 
         disconnected_blocks = []
         while self.chain[-1].id != fork_block.id:
-            block = self.disconnect_block(self.chain[-1])
+            block = self.disconnect_block()
             disconnected_blocks.insert(0, block)
 
         # Replace branch with newly disconnected blocks
@@ -672,12 +675,6 @@ class Node:
                 # Undo changes made by reconnecting disconnected blocks
                 self.reorg(disconnected_blocks, branch_index, fork_index)
                 logger.info(f"Reorg failed")
-
-    def initial_block_download(self):
-        # just talk to one peer for now
-        # FIXME
-        for peer in self.peers:
-            send_message(peer, "get_blocks", self.chain[-1].id)
 
     def connect_block(self, block):
         # Find the parent
@@ -705,9 +702,8 @@ class Node:
             for tx in block.txns:
                 self.add_to_utxo_set(tx)
 
-    def disconnect_block(self, block):
-        assert block == self.chain[-1], "Can only disconnect tip of chain"
-        for tx in block.txns:
+    def disconnect_block(self):
+        for tx in self.chain[-1].txns:
             self.remove_from_utxo_set(tx)
         return self.chain.pop()
 
