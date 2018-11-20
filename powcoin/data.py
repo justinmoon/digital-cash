@@ -22,7 +22,7 @@ mined_genesis_block = mine_block(unmined_genesis_block)
 print("Genesis mined")
 for n in [node, alice_node, bob_node]:
     n.chain.append(mined_genesis_block)
-    n.add_tx_to_utxo_set(genesis_coinbase)
+    n.add_to_utxo_set(genesis_coinbase)
 print(mined_genesis_block)
 print()
 

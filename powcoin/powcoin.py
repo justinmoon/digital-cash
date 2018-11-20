@@ -164,7 +164,6 @@ def txn_iterator(chain):
         for height, block in enumerate(chain) for txn in block.txns)
 
 def total_work(chain):
-    # FIXME
     return len(chain)
 
 def tx_in_to_utxo(tx_in, chain):
@@ -204,7 +203,7 @@ def tx_in_to_utxo(tx_in, chain):
     # def active_chain(self):
         # return self.chains[self.active_chain_index]
 
-    # def add_tx_to_utxo_set(self, tx):
+    # def add_to_utxo_set(self, tx):
         # # FIXME: connect_tx
         # # Remove utxos that were just spent
         # if not tx.is_coinbase:
@@ -221,7 +220,7 @@ def tx_in_to_utxo(tx_in, chain):
             # self.mempool.remove(tx)
             # logging.info(f"Removed tx from mempool")
 
-    # def remove_tx_from_utxo_set(self, tx):
+    # def remove_from_utxo_set(self, tx):
         # # FIXME: disconnect_tx
         # # tx.tx_ins put back in self.utxo_set
         # if not tx.is_coinbase:
@@ -460,11 +459,11 @@ def tx_in_to_utxo(tx_in, chain):
         # self.validate_block(block, check_txns=True)
 
         # for tx in block.txns:
-            # self.add_tx_to_utxo_set(tx)
+            # self.add_to_utxo_set(tx)
 
     # def disconnect_block(self, block):
         # for tx in block.txns:
-            # self.remove_tx_from_utxo_set(tx)
+            # self.remove_from_utxo_set(tx)
 
     # def reorg(self, block):
         # pass
@@ -493,7 +492,7 @@ class Node:
         if peer not in self.peers:
             node.peers.append(peer)
 
-    def add_tx_to_utxo_set(self, tx):
+    def add_to_utxo_set(self, tx):
         # Remove utxos that were just spent
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
@@ -509,7 +508,7 @@ class Node:
             self.mempool.remove(tx)
             logging.info(f"Removed tx from mempool")
 
-    def remove_tx_from_utxo_set(self, tx):
+    def remove_from_utxo_set(self, tx):
         # tx.tx_ins put back in self.utxo_set
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
@@ -638,18 +637,13 @@ class Node:
     def attempt_reorg(self):
         side_branches = list(self.branches)  # May change during this call.
 
-        for branch_idx, chain in enumerate(side_branches):
-            #FIXME: use total_work()
-            _, chain_index, height = self.locate_block(chain[0].prev_id)
-            active_height = len(self.chain)
-            branch_height = len(chain) + height + 1 ## FIXME off by 1
-
-            if branch_height > active_height:
-                logger.info(
-                        f'attempting reorg of idx {branch_idx} to active_chain: '
-                        f'new height of {branch_height} (vs. {active_height})')
-                self.reorg(old_blocks=self.chain[height+1:],
-                           new_blocks=chain, branch_index=branch_idx)
+        for branch_index, branch in enumerate(side_branches):
+            # Compare branch with blocks on self.chain since fork
+            _, _, fork_height = self.locate_block(branch[0].prev_id)
+            blocks_after_fork = self.chain[fork_height+1:]
+            if total_work(branch) > total_work(blocks_after_fork):
+                logger.info(f'Attempting reorg')
+                self.reorg(branch, branch_index, fork_height)
 
         # Sanity check
         prev_id = self.chain[0].id
@@ -657,30 +651,27 @@ class Node:
             assert block.prev_id == prev_id
             prev_id = block.id
 
-    def reorg(self, old_blocks, new_blocks, branch_index):
+    def reorg(self, branch, branch_index, fork_index):
         # Disconnect old blocks 
         # FIXME think it would be more intuitive to reverse old_blocks here...
-        for block in old_blocks:
-            self.disconnect_block(block)
+        fork_block = self.chain[fork_index]
 
-        # Preserve old blocks as a branch
-        self.branches.append(old_blocks)
+        disconnected_blocks = []
+        while self.chain[-1].id != fork_block.id:
+            block = self.disconnect_block(self.chain[-1])
+            disconnected_blocks.insert(0, block)
+
+        # Replace branch with newly disconnected blocks
+        self.branches[branch_index] = disconnected_blocks
 
         # Connect new blocks
-        for block in new_blocks:
+        for block in branch:
             try:
                 self.connect_block(block)
             except:
-                logger.info(f"Reorg failed due to validation error {block.id}")
-
-                # Remove bad block and children from branches
-                branch = self.branches[branch_index]
-                self.branches[branch_index] = branch[:branch.index(block)]
-                
-                # Rollback
-                ob = new_blocks[:new_blocks.index(block)][::-1]
-                nb = old_blocks[::-1]
-                return self.reorg(ob, nb, branch_index=branch_index)
+                # Undo changes made by reconnecting disconnected blocks
+                self.reorg(disconnected_blocks, branch_index, fork_index)
+                logger.info(f"Reorg failed")
 
     def initial_block_download(self):
         # just talk to one peer for now
@@ -712,12 +703,13 @@ class Node:
         # Update utxo set if we're 
         if extends_chain:
             for tx in block.txns:
-                self.add_tx_to_utxo_set(tx)
+                self.add_to_utxo_set(tx)
 
     def disconnect_block(self, block):
-        self.chain.pop()  # FIXME
+        assert block == self.chain[-1], "Can only disconnect tip of chain"
         for tx in block.txns:
-            self.remove_tx_from_utxo_set(tx)
+            self.remove_from_utxo_set(tx)
+        return self.chain.pop()
 
 ###################
 # Tx Construction #
@@ -972,7 +964,7 @@ def main(args):
         unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
         mined_genesis_block = mine_block(unmined_genesis_block, step=1)
         node.chain.append(mined_genesis_block)
-        node.add_tx_to_utxo_set(genesis_coinbase)
+        node.add_to_utxo_set(genesis_coinbase)
 
         # First thing, start server in another thread
         server_thread = threading.Thread(target=serve, name="server")
