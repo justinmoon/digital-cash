@@ -29,23 +29,14 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 18
+BITS = 15
 POW_TARGET = 1 << (256 - BITS)
 BLOCK_SUBSIDY = 50
 PORT = 10000
 node = None
 chain_lock = threading.Lock()
 
-
-# class LoggerAdapter(logging.LoggerAdapter):
-    # def __init__(self, logger, prefix):
-        # super(LoggerAdapter, self).__init__(logger, {})
-        # self.prefix = prefix
-
-    # def process(self, msg, kwargs):
-        # return '[%s] %s' % (self.prefix, msg), kwargs
-
-logging.basicConfig(level="DEBUG", format="%(threadName)-6s | %(message)s")
+logging.basicConfig(level="DEBUG", format="%(threadName)-12s | %(message)s")
 logger = logging.getLogger(__name__)
 
 def print_exc():
@@ -690,7 +681,7 @@ def main(args):
 
         node_id = int(os.environ["ID"])
 
-        duration = 5 * node_id
+        duration = 30 * node_id
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
