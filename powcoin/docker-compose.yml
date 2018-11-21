@@ -16,7 +16,8 @@ services:
     ports:
         - "10001:10000"
     environment:
-      PEERS: 'node0,node2'
+      #PEERS: 'node0,node2'
+      PEERS: 'node0'
       ID: 1
 
   node2:
@@ -24,6 +25,7 @@ services:
     ports:
         - "10002:10000"
     environment:
-      PEERS: 'node0,node1'
+      #PEERS: 'node0,node1'
+      PEERS: 'node0'
       ID: 2
 
