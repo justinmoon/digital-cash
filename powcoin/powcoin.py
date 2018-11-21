@@ -36,6 +36,15 @@ PORT = 10000
 node = None
 chain_lock = threading.Lock()
 
+
+# class LoggerAdapter(logging.LoggerAdapter):
+    # def __init__(self, logger, prefix):
+        # super(LoggerAdapter, self).__init__(logger, {})
+        # self.prefix = prefix
+
+    # def process(self, msg, kwargs):
+        # return '[%s] %s' % (self.prefix, msg), kwargs
+
 logging.basicConfig(level="DEBUG", format="%(threadName)-6s | %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -199,7 +208,8 @@ class Node:
 
     def initial_block_download(self):
         for peer in self.peers:
-            send_message(peer, "get_blocks", self.chain[-1].id)
+            block_ids = [block.id for block in self.chain][-50:]  # HACK
+            send_message(peer, "get_blocks", block_ids)
 
     def add_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -333,14 +343,14 @@ class Node:
             # Attempt a reorg
             self.attempt_reorg()
 
-            # Simulates network latency
-            time.sleep(random.random())  
-
             # Tell peers
-            # n = random.randint(1, 10)
             for peer in self.peers:
-                # if random.randint(1, 10) != 5:
-                send_message(peer, "block", block)
+                # send_message(peer, "blocks", [block])
+                # Simulates network latency
+                if random.randint(1, 10) != 5:
+                    threading.Timer(
+                        random.random(), send_message, [peer, "blocks", [block]]
+                    ).start()
 
             # FIXME
             logging.info(f"Block accepted: height={len(self.chain) - 1} txns={len(block.txns)}")
@@ -387,6 +397,13 @@ class Node:
     def connect_block(self, block):
         # Find the parent
         chain, chain_index, height = self.locate_block(block.prev_id)
+
+        # If we don't know the parent, re-enter IBD to search for it
+        if not chain:
+            logger.info("DOWNLOADING MISSING BLOCKS")
+            self.initial_block_download()
+            self.syncing = True
+            raise Exception("Can't connect block. Searching for parent.")
 
         # Validate the block
         # Validate transactions if we're adding to main chain
@@ -572,19 +589,21 @@ class TCPHandler(socketserver.BaseRequestHandler):
         if command == "ping":
             self.respond(command="pong", data="")
 
-        if command == "block":
-            if data == None:
+        if command == "blocks":
+            if data == []:
                 logger.info(f"Initial block download complete")
                 node.syncing = False
                 return
 
             logging.info(f"Received block from peer")
 
-            try:
-                node.handle_block(data)
-                mining_interrupt.set()
-            except:
-                pass
+            for block in data:
+                try:
+                    node.handle_block(block)
+                    mining_interrupt.set()
+                except:
+                    logger.info("Rejected block block")
+                    pass
 
             # If syncing, request next block
             if node.syncing:
@@ -602,18 +621,17 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="utxos-response", data=utxos)
 
         if command == "get_blocks":
-            next_block = None
-            # locate the block in the main chain
-            # FIXME: this should call a general-purpose function
-            for block in node.chain:
-                if block.prev_id == data:
-                    next_block = block
-                    break
+            # Find our most recent block they don't know about
+            peer_block_ids = data
+            for block in node.chain[::-1]:
+                if block.id not in peer_block_ids \
+                        and block.prev_id in peer_block_ids:
+                    send_message(peer, command="blocks", data=[block])
+                    logger.info(f"sent 'block' message: {block}")
+                    return
 
-            # Says the IBD is done
-            send_message(peer, command="block", data=next_block)
-            logger.info(f"sent 'block' message: {next_block}")
-
+            logger.info("couldn't serve get_blocks request")
+            send_message(peer, command="blocks", data=[])
 
 def external_address(node):
     i = int(node[-1])
@@ -621,7 +639,8 @@ def external_address(node):
     return ('localhost', port)
 
 def serve():
-    server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
+    # server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
+    server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
 def send_message(address, command, data, response=False, retries=3):
@@ -636,7 +655,7 @@ def send_message(address, command, data, response=False, retries=3):
                 return deserialize(s.recv(5000))
         except:
             logger.info("retrying")
-            time.sleep(.1)
+            # time.sleep(.1)
             return send_message(address, command, data, response, 
                          retries=retries-1)
             
@@ -702,8 +721,6 @@ def main(args):
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         logger.info(response["data"])
-
-
     
     elif args["utxos"]:
         public_key = user_public_key(args["<name>"])
