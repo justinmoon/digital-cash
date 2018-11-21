@@ -345,12 +345,7 @@ class Node:
 
             # Tell peers
             for peer in self.peers:
-                # send_message(peer, "blocks", [block])
-                # Simulates network latency
-                if random.randint(1, 10) != 5:
-                    threading.Timer(
-                        random.random(), send_message, [peer, "blocks", [block]]
-                    ).start()
+                disrupt(send_message, [peer, "blocks", [block]])
 
             # FIXME
             logging.info(f"Block accepted: height={len(self.chain) - 1} txns={len(block.txns)}")
@@ -422,7 +417,7 @@ class Node:
         chain.append(block)
         logger.info(f"Extending chain #{chain_index}")
 
-        # Update utxo set if we're 
+        # Update utxo set if we're appending to main chain
         if extends_chain:
             for tx in block.txns:
                 self.add_to_utxo_set(tx)
@@ -532,31 +527,24 @@ def mine_forever(public_key):
 # Networking #
 ##############
 
-def prepare_message(command, data):
-    return {
-        "command": command,
-        "data": data,
-    }
-
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def get_canonical_peer_address(self):
         ip = self.client_address[0]
         try:
             hostname = socket.gethostbyaddr(ip)
-            hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
+            hostname = re.search(r"_(.*?)_", hostname[0]).group(1)
         except:
             hostname = ip
         return (hostname, PORT)
 
     def respond(self, command, data):
         response = prepare_message(command, data)
-        return self.request.sendall(serialize(response))
+        return self.request.sendall(response)
 
     def handle(self):
         peer = self.get_canonical_peer_address()
-        message_bytes = self.request.recv(1024*4).strip()
-        message = deserialize(message_bytes)
+        message = read_message(self.request)
         command = message["command"]
         data = message["data"]
 
@@ -572,8 +560,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
             # Request their peers
             send_message(peer, "peers", None)
 
-        assert peer in node.peers, \
-                "rejecting message from unconnected peer"
+        # assert peer in node.peers, \
+                # "rejecting message from unconnected peer"
 
         if command == "peers":
             send_message(peer, "peers-response", node.peers)
@@ -582,9 +570,9 @@ class TCPHandler(socketserver.BaseRequestHandler):
             for peer in data:
                 try:
                     node.connect(peer)
+                    logger.info(f'Connected to "{peer[0]}"')
                 except:
                     logger.info(f'Node "{peer[0]}" offline')
-            logger.info(f"received peers: {data}")
 
         if command == "ping":
             self.respond(command="pong", data="")
@@ -595,14 +583,14 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 node.syncing = False
                 return
 
-            logging.info(f"Received block from peer")
+            # logging.info(f"Received block from peer")
 
             for block in data:
                 try:
                     node.handle_block(block)
                     mining_interrupt.set()
                 except:
-                    logger.info("Rejected block block")
+                    # logger.info("Rejected block block")
                     pass
 
             # If syncing, request next block
@@ -614,6 +602,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
     
         if command == "balance":
             balance = node.fetch_balance(data)
+            logger.info("\n\nbalance req\n\n")
             self.respond(command="balance-response", data=balance)
 
         if command == "utxos":
@@ -626,8 +615,10 @@ class TCPHandler(socketserver.BaseRequestHandler):
             for block in node.chain[::-1]:
                 if block.id not in peer_block_ids \
                         and block.prev_id in peer_block_ids:
-                    send_message(peer, command="blocks", data=[block])
-                    logger.info(f"sent 'block' message: {block}")
+                    height = node.chain.index(block)
+                    blocks = node.chain[height:height+10]
+                    send_message(peer, command="blocks", data=blocks)
+                    logger.info(f"sent 'blocks' message")
                     return
 
             logger.info("couldn't serve get_blocks request")
@@ -636,23 +627,52 @@ class TCPHandler(socketserver.BaseRequestHandler):
 def external_address(node):
     i = int(node[-1])
     port = PORT + i
-    return ('localhost', port)
+    return ('127.0.0.1', port)
 
 def serve():
     # server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
 
+def read_message(s):
+    data = b''
+    # Our protocol is: first 4 bytes signify msg length.
+    raw_msg_len = s.recv(4) or b"\x00"
+    msg_len = int.from_bytes(raw_msg_len, 'big')
+
+    while msg_len > 0:
+        tdat = s.recv(1024)
+        data += tdat
+        msg_len -= len(tdat)
+
+    return deserialize(data)
+
+def prepare_message(command, data):
+    d = {
+        "command": command,
+        "data": data,
+    }
+    ser = serialize(d)
+    length = len(ser).to_bytes(4, "big")
+    return length + ser
+
+
+def disrupt(func, args):
+    # Adds latency. Drops packets.
+    if random.randint(1, 10) != 5:
+        threading.Timer(random.random(), func, args).start()
+
+
 def send_message(address, command, data, response=False, retries=3):
     if retries == 0:
         raise Exception("connection error")
-    message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.connect(address)
-            s.sendall(serialize(message))
+            message = prepare_message(command, data)
+            s.sendall(message)
             if response:
-                return deserialize(s.recv(5000))
+                return read_message(s)
         except:
             logger.info("retrying")
             # time.sleep(.1)
@@ -674,7 +694,6 @@ def main(args):
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
-
 
         # Set up the node (for convience, alice get coinbase coins)
         global node
@@ -698,8 +717,9 @@ def main(args):
         for peer in peers:
             try:
                 node.connect(peer)
+                logger.info(f'Connected to "{peer[0]}"')
             except:
-                logger.info(f'Node "{peer} offline"')
+                logger.info(f'Node "{peer[0]} offline"')
 
         # Do initial block download
         logger.info("starting ibd")
