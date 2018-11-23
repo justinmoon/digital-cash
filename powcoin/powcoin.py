@@ -270,7 +270,7 @@ class Node:
         for tx_out in tx.tx_outs:
             out_sum += tx_out.amount
 
-        # Check no value created or destroyed
+        # No value created or destroyed
         assert in_sum == out_sum
 
     def validate_coinbase(self, tx):
@@ -283,8 +283,7 @@ class Node:
         try:
             self.validate_tx(tx)
         except:
-            logger.info(f"rejecting invalid tx: {tx}")
-            print_exc()
+            logger.info(f"Rejecting invalid tx: {tx}")
             return
 
         # Add to our mempool if it passes validation and isn't already there
@@ -310,6 +309,7 @@ class Node:
         chain = self.branches[-1]
         chain_index = len(self.branches)
         height = 0
+        # Returns same data as locate_block
         return chain, chain_index, height
 
     def validate_block(self, block):
@@ -339,16 +339,13 @@ class Node:
             for peer in self.peers:
                 disrupt(send_message, [peer, "blocks", [block]])
 
-            # FIXME
-            logging.info(f"Block accepted: height={len(self.chain) - 1} txns={len(block.txns)}")
-
     def attempt_reorg(self):
         for branch_index, branch in enumerate(self.branches):
             # Compare branch with self.chain since fork block
             _, _, fork_height = self.locate_block(branch[0].prev_id)
             chain_since_fork = self.chain[fork_height+1:]
             if total_work(branch) > total_work(chain_since_fork):
-                logger.info(f'Attempting reorg')
+                logger.info(f'Reorging to branch #{branch_index}')
                 self.reorg(branch, branch_index, fork_height)
 
     def reorg(self, branch, branch_index, fork_index):
@@ -400,7 +397,7 @@ class Node:
 
         # Add block to chain
         chain.append(block)
-        logger.info(f"Extending chain #{chain_index}")
+        logger.info(f"Adding block at height #{height} to chain #{chain_index}")
 
     def disconnect_block(self):
         for tx in self.chain[-1].txns:
@@ -482,8 +479,6 @@ def mine_forever(public_key):
     while True:
         with chain_lock:
             coinbase = prepare_coinbase(public_key, len(node.chain) - 1)
-            logging.info(f"Top of mining loop. Mempool contains {len(node.mempool)} txns")
-            # logging.info([coinbase] + deepcopy(node.mempool))
             unmined_block = Block(
                 txns=[coinbase] + deepcopy(node.mempool),
                 prev_id=node.chain[-1].id,
@@ -494,13 +489,13 @@ def mine_forever(public_key):
         # Perhaps an exception would be wiser ...
         if mined_block:
             logger.info("")
-            logger.info(f"Mined a block w/ txns")
-            # FIXME
+            logger.info("Mined a block")
             try:
                 node.handle_block(mined_block)
             except:
-                import traceback
-                logger.info(traceback.format_exc())
+                logger.info("\n\n\nmined block wasn't accepted""")
+                print_exc()
+                continue
 
 
 ##############
@@ -540,6 +535,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             # Request their peers
             send_message(peer, "peers", None)
 
+        # FIXME
         # assert peer in node.peers, \
                 # "rejecting message from unconnected peer"
 
