@@ -31,7 +31,9 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # BITS = 2
 BITS = 15
 POW_TARGET = 1 << (256 - BITS)
+GET_BLOCKS_CHUNK = 10
 BLOCK_SUBSIDY = 50
+ACTIVE_CHAIN_INDEX = 0
 PORT = 10000
 node = None
 chain_lock = threading.Lock()
@@ -185,7 +187,6 @@ class Node:
         self.mempool = []
         self.peers = []
         self.address = address
-        self.syncing = False
         self.chain = []
         self.branches = []
 
@@ -310,13 +311,13 @@ class Node:
         height = 0
         return chain, chain_index, height
 
-    def validate_block(self, block, check_txns=False):
+    def validate_block(self, block, validate_txns=False):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
         # Check txns
         # FIXME can i infer whether we should check txns?
-        if check_txns:
+        if validate_txns:
             self.validate_coinbase(block.txns[0])
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
@@ -388,7 +389,6 @@ class Node:
         if not chain:
             logger.info("DOWNLOADING MISSING BLOCKS")
             self.initial_block_download()
-            self.syncing = True
             raise Exception("Can't connect block. Searching for parent.")
 
         # Validate the block
@@ -396,7 +396,7 @@ class Node:
         is_tip = height == len(chain) - 1
         main_chain = chain_index == 0  # FIXME explain this magic number
         extends_chain = main_chain and is_tip
-        self.validate_block(block, check_txns=extends_chain)
+        self.validate_block(block, validate_txns=extends_chain)
 
         # If previous block isn't the end of it's chain, create a new one
         # FIXME: if this is false and we're off main chain, below fails
@@ -569,13 +569,6 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "blocks":
-            if data == []:
-                logger.info(f"Initial block download complete")
-                node.syncing = False
-                return
-
-            # logging.info(f"Received block from peer")
-
             for block in data:
                 try:
                     node.handle_block(block)
@@ -585,7 +578,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     pass
 
             # If syncing, request next block
-            if node.syncing:
+            if len(data) == GET_BLOCKS_CHUNK:
                 node.initial_block_download()
 
         if command == "tx":
@@ -607,9 +600,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 if block.id not in peer_block_ids \
                         and block.prev_id in peer_block_ids:
                     height = node.chain.index(block)
-                    blocks = node.chain[height:height+10]
+                    blocks = node.chain[height:height+GET_BLOCKS_CHUNK]
                     send_message(peer, command="blocks", data=blocks)
-                    logger.info(f"sent 'blocks' message")
                     return
 
             logger.info("couldn't serve get_blocks request")
@@ -714,7 +706,6 @@ def main(args):
 
         # Do initial block download
         logger.info("starting ibd")
-        node.syncing = True
         node.initial_block_download()
 
         # Run the miner in a thread
