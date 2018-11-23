@@ -266,8 +266,8 @@ class Node:
             amount = tx_out.amount
             in_sum += amount
 
+        # Sum up the total outpouts
         for tx_out in tx.tx_outs:
-            # Sum up the total outpouts
             out_sum += tx_out.amount
 
         # Check no value created or destroyed
@@ -297,6 +297,7 @@ class Node:
                 send_message(peer, "tx", tx)
 
     def locate_block(self, block_id):
+        # chain_index of 0: on self.chain. Greater means it's a branch
         chains = [self.chain] + self.branches
         for chain_index, chain in enumerate(chains):
             for height, block in enumerate(chain):
@@ -311,13 +312,12 @@ class Node:
         height = 0
         return chain, chain_index, height
 
-    def validate_block(self, block, validate_txns=False):
+    def validate_block(self, block):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
-        # Check txns
-        # FIXME can i infer whether we should check txns?
-        if validate_txns:
+        # Check txns if we're extending main chain
+        if block.prev_id == self.chain[-1].id:
             self.validate_coinbase(block.txns[0])
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
@@ -342,23 +342,14 @@ class Node:
             # FIXME
             logging.info(f"Block accepted: height={len(self.chain) - 1} txns={len(block.txns)}")
 
-            # Sanity checks
-            assert len(set([block.id for block in self.chain])) == len(self.chain)
-
     def attempt_reorg(self):
         for branch_index, branch in enumerate(self.branches):
-            # Compare branch with blocks on self.chain since fork
+            # Compare branch with self.chain since fork block
             _, _, fork_height = self.locate_block(branch[0].prev_id)
-            blocks_after_fork = self.chain[fork_height+1:]
-            if total_work(branch) > total_work(blocks_after_fork):
+            chain_since_fork = self.chain[fork_height+1:]
+            if total_work(branch) > total_work(chain_since_fork):
                 logger.info(f'Attempting reorg')
                 self.reorg(branch, branch_index, fork_height)
-
-        # Sanity check
-        prev_id = self.chain[0].id
-        for block in self.chain[1:]:
-            assert block.prev_id == prev_id
-            prev_id = block.id
 
     def reorg(self, branch, branch_index, fork_index):
         fork_block = self.chain[fork_index]
@@ -367,7 +358,7 @@ class Node:
         disconnected_blocks = []
         while self.chain[-1].id != fork_block.id:
             block = self.disconnect_block()
-            disconnected_blocks.insert(0, block)
+            disconnected_blocks.insert(0, block)  # Prepend to preserve order
 
         # Replace branch with newly disconnected blocks
         self.branches[branch_index] = disconnected_blocks
@@ -375,9 +366,11 @@ class Node:
         # Connect new blocks
         for block in branch:
             try:
+                # This will now validate txns against utxo_set
+                # Could fail now even if it previously passed limited validation
                 self.connect_block(block)
             except:
-                # Undo changes made so far
+                # If we can't connect block, undo all reorg changes
                 self.reorg(disconnected_blocks, branch_index, fork_index)
                 logger.info(f"Reorg failed")
 
@@ -386,32 +379,28 @@ class Node:
         chain, chain_index, height = self.locate_block(block.prev_id)
 
         # If we don't know the parent, re-enter IBD to search for it
-        if not chain:
+        if chain is None:
             logger.info("DOWNLOADING MISSING BLOCKS")
             self.initial_block_download()
             raise Exception("Can't connect block. Searching for parent.")
 
         # Validate the block
-        # Validate transactions if we're adding to main chain
-        is_tip = height == len(chain) - 1
-        main_chain = chain_index == 0  # FIXME explain this magic number
-        extends_chain = main_chain and is_tip
-        self.validate_block(block, validate_txns=extends_chain)
+        self.validate_block(block)
 
         # If previous block isn't the end of it's chain, create a new one
-        # FIXME: if this is false and we're off main chain, below fails
-        if not is_tip:
+        # (branches of branches not implemented)
+        if height != len(chain) - 1:
             chain, chain_index, height = self.create_branch()
             logger.info(f"Creating branch #{len(self.branches)}")
+
+        # Update utxo set if we're appending to main chain
+        if block.prev_id == self.chain[-1].id:
+            for tx in block.txns:
+                self.add_to_utxo_set(tx)
 
         # Add block to chain
         chain.append(block)
         logger.info(f"Extending chain #{chain_index}")
-
-        # Update utxo set if we're appending to main chain
-        if extends_chain:
-            for tx in block.txns:
-                self.add_to_utxo_set(tx)
 
     def disconnect_block(self):
         for tx in self.chain[-1].txns:
