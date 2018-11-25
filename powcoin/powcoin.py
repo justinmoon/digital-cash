@@ -29,9 +29,9 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 15
+BITS = 17
 POW_TARGET = 1 << (256 - BITS)
-GET_BLOCKS_CHUNK = 10
+GET_BLOCKS_CHUNK = 50
 BLOCK_SUBSIDY = 50
 ACTIVE_CHAIN_INDEX = 0
 PORT = 10000
@@ -384,8 +384,13 @@ class Node:
         # Validate the block
         self.validate_block(block)
 
-        # If previous block isn't the end of it's chain, create a new one
         # (branches of branches not implemented)
+        if height != len(chain) -1 and chain_index != 0:
+            logger.info("\n\n\n\n\nforks of forks not implemented\n\n\n\n\n")
+            del self.branches[chain_index - 1]
+            raise Exception("Forks of forks not implemented")
+
+        # If previous block isn't the end of it's chain, create a new one
         if height != len(chain) - 1:
             chain, chain_index, height = self.create_branch()
             logger.info(f"Creating branch #{len(self.branches)}")
