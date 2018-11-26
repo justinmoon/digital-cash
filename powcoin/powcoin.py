@@ -323,7 +323,7 @@ class Node:
             self.branches.append([block])
             logger.info(f"Created branch {len(self.branches)} to height {len(self.branches[-1])}")
         elif extends_branch:
-            # Extend the branch
+            # Add it to the branch
             branch.append(block)
             logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
@@ -565,8 +565,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     send_message(peer, command="blocks", data=blocks)
                     return
 
-            # logger.info("couldn't serve get_blocks request")
-            # send_message(peer, command="blocks", data=[])
+            logger.info("couldn't serve get_blocks request")
+            send_message(peer, command="blocks", data=[])
 
 def external_address(node):
     i = int(node[-1])
