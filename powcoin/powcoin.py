@@ -29,7 +29,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 17
+BITS = 14
 POW_TARGET = 1 << (256 - BITS)
 GET_BLOCKS_CHUNK = 50
 BLOCK_SUBSIDY = 50
@@ -139,26 +139,11 @@ class Block:
     def header(self, nonce):
         return serialize([self.txns, nonce])
 
+    def __eq__(self, other):
+        return self.id == other.id
+
     def __repr__(self):
         return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
-
-
-class Chain(list):
-
-    # def __init__(self, blocks):
-        # self.blocks = blocks
-
-    @property
-    def work(self):
-        return len(self)
-
-    @property
-    def tip(self):
-        return self[-1]
-
-    @property
-    def height(self):
-        return len(self) - 1
 
 def txn_iterator(chain):
     return (
@@ -174,7 +159,6 @@ def tx_in_to_utxo(tx_in, chain):
             tx_out = tx.tx_outs[tx_in.index]
             return UnspentTxOut(tx_id=tx_in.tx_id, index=tx_in.index,
                    amount=tx_out.amount, public_key=tx_out.public_key)
-
 
 ########
 # Node #
@@ -195,7 +179,7 @@ class Node:
             send_message(peer, "connect", None)
 
     def handle_peer(self, peer):
-        if peer not in self.peers:
+        if peer not in self.peers and peer != self.address:
             node.peers.append(peer)
 
     def initial_block_download(self):
@@ -295,22 +279,12 @@ class Node:
             for peer in self.peers:
                 send_message(peer, "tx", tx)
 
-    def locate_block(self, block_id):
-        # chain_index of 0: on self.chain. Greater means it's a branch
-        chains = [self.chain] + self.branches
-        for chain_index, chain in enumerate(chains):
+    def locate_in_branch(self, block_id):
+        for chain_index, chain in enumerate(self.branches):
             for height, block in enumerate(chain):
                 if block.id == block_id:
                     return chain, chain_index, height
         return None, None, None
-
-    def create_branch(self):
-        self.branches.append([])
-        chain = self.branches[-1]
-        chain_index = len(self.branches)
-        height = 0
-        # Returns same data as locate_block
-        return chain, chain_index, height
 
     def validate_block(self, block):
         # Check POW
@@ -323,93 +297,88 @@ class Node:
                 self.validate_tx(tx)
 
     def handle_block(self, block):
-        # Claim the lock
-        with chain_lock:
-            # Ignore if we've already seen it
-            if self.locate_block(block.id)[0]:
-                raise Exception("Duplicate block")
+        # Ignore if we've already seen it
+        in_branch = self.locate_in_branch(block.id)[0]
+        in_chain = block in self.chain
+        if in_branch or in_chain:
+            raise Exception("Duplicate block")
 
-            # Add block to chain / branch. Updates utxos if chain.
+        # First of all, validate thE block
+        self.validate_block(block)
+
+        # Conditions used in if-statements below
+        branch, branch_index, height = self.locate_in_branch(block.prev_id)
+        extends_chain = block.prev_id == self.chain[-1].id
+        forks_chain = not branch and \
+            block.prev_id in [block.id for block in self.chain[:-1]]
+        extends_branch = branch and height == len(branch) -1
+        forks_branch = branch and height != len(branch) -1
+
+        if extends_chain:
+            # Add it to the chain
             self.connect_block(block)
+            logger.info(f"Extended chain to height {len(self.chain)}")
+        elif forks_chain:
+            # Create a new branch with just this block
+            self.branches.append([block])
+            logger.info(f"Created branch {len(self.branches)} to height {len(self.branches[-1])}")
+        elif extends_branch:
+            # Extend the branch
+            branch.append(block)
+            logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
-            # Attempt a reorg
-            self.attempt_reorg()
+            # Reorg if branch now has more work than main chain
+            # FIXME
+            chain_ids = [b.id for b in self.chain]
 
-            # Tell peers
-            for peer in self.peers:
-                disrupt(send_message, [peer, "blocks", [block]])
-
-    def attempt_reorg(self):
-        for branch_index, branch in enumerate(self.branches):
-            # Compare branch with self.chain since fork block
-            _, _, fork_height = self.locate_block(branch[0].prev_id)
-            chain_since_fork = self.chain[fork_height+1:]
+            chain_since_fork = self.chain[chain_ids.index(branch[0].prev_id)+1:]
+            print(f"chain: {len(chain_since_fork)} branch: {len(branch)}")
             if total_work(branch) > total_work(chain_since_fork):
-                logger.info(f'Reorging to branch #{branch_index}')
-                self.reorg(branch, branch_index, fork_height)
-
-    def reorg(self, branch, branch_index, fork_index):
-        fork_block = self.chain[fork_index]
-
-        # Disconnect old blocks 
-        disconnected_blocks = []
-        while self.chain[-1].id != fork_block.id:
-            block = self.disconnect_block()
-            disconnected_blocks.insert(0, block)  # Prepend to preserve order
-
-        # Replace branch with newly disconnected blocks
-        self.branches[branch_index] = disconnected_blocks
-
-        # Connect new blocks
-        for block in branch:
-            try:
-                # This will now validate txns against utxo_set
-                # Could fail now even if it previously passed limited validation
-                self.connect_block(block)
-            except:
-                # If we can't connect block, undo all reorg changes
-                self.reorg(disconnected_blocks, branch_index, fork_index)
-                logger.info(f"Reorg failed")
-
-    def connect_block(self, block):
-        # Find the parent
-        chain, chain_index, height = self.locate_block(block.prev_id)
-
-        # If we don't know the parent, re-enter IBD to search for it
-        if chain is None:
+                logger.info(f"Reorging to branch {branch_index}")
+                self.reorg(branch, branch_index, height)
+        elif forks_branch:
+            # Create a new branch with branch up to fork + this block
+            self.branches.append(branch[:height+1] + [block])
+            logger.info(f"Created (fork) branch {len(self.branches)} to height {len(self.branches[-1])}")
+        else:
+            # Re-enter IBD to find parent blocks
             logger.info("DOWNLOADING MISSING BLOCKS")
             self.initial_block_download()
             raise Exception("Can't connect block. Searching for parent.")
 
-        # Validate the block
-        self.validate_block(block)
+        # If there were no problems, tell peers
+        for peer in self.peers:
+            disrupt(send_message, [peer, "blocks", [block]])
 
-        # (branches of branches not implemented)
-        if height != len(chain) -1 and chain_index != 0:
-            logger.info("\n\n\n\n\nforks of forks not implemented\n\n\n\n\n")
-            del self.branches[chain_index - 1]
-            raise Exception("Forks of forks not implemented")
-
-        # If previous block isn't the end of it's chain, create a new one
-        if height != len(chain) - 1:
-            chain, chain_index, height = self.create_branch()
-            logger.info(f"Creating branch #{len(self.branches)}")
-
-        # Update utxo set if we're appending to main chain
-        if block.prev_id == self.chain[-1].id:
+    def reorg(self, branch, branch_index, fork_index):
+        # Disconnect to fork block, preserving as a branch
+        disconnected_blocks = []
+        while self.chain[-1].id != branch[0].prev_id:
+            block = self.chain.pop()
             for tx in block.txns:
-                self.add_to_utxo_set(tx)
+                self.remove_from_utxo_set(tx)
+            disconnected_blocks.insert(0, block)
 
-        # Add block to chain
-        chain.append(block)
-        logger.info(f"Adding block at height #{height} to chain #{chain_index}")
+        # Replace branch with newly disconnected blocks
+        self.branches[branch_index] = disconnected_blocks
 
-    def disconnect_block(self):
-        for tx in self.chain[-1].txns:
-            self.remove_from_utxo_set(tx)
-        return self.chain.pop()
+        # Connect new blocks, rollback if error encountered
+        for block in branch:
+            try:
+                self.validate_block(block)
+                self.connect_block(block)
+            except:
+                self.reorg(disconnected_blocks, branch_index, fork_index)
+                logger.info(f"Reorg failed")
 
-###################
+    def connect_block(self, block):
+        # Add to main chain
+        self.chain.append(block)
+        # Update utxo set
+        for tx in block.txns:
+            self.add_to_utxo_set(tx)
+
+##################
 # Tx Construction #
 ###################
 
@@ -496,7 +465,8 @@ def mine_forever(public_key):
             logger.info("")
             logger.info("Mined a block")
             try:
-                node.handle_block(mined_block)
+                with chain_lock:
+                    node.handle_block(mined_block)
             except:
                 logger.info("\n\n\nmined block wasn't accepted""")
                 print_exc()
@@ -530,7 +500,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
 
         if command == "connect":
             node.handle_peer(peer)
-            logger.info(f'Connected to {peer[0]}"')
+            logger.info(f'Connected to {node.peers}')
             send_message(peer, "connect-response", None)
 
         if command == "connect-response":
@@ -559,13 +529,14 @@ class TCPHandler(socketserver.BaseRequestHandler):
             self.respond(command="pong", data="")
 
         if command == "blocks":
-            for block in data:
-                try:
-                    node.handle_block(block)
-                    mining_interrupt.set()
-                except:
-                    # logger.info("Rejected block block")
-                    pass
+            with chain_lock:
+                for block in data:
+                    try:
+                        node.handle_block(block)
+                        mining_interrupt.set()
+                    except Exception as e:
+                        logger.info("Rejected block")
+                        pass
 
             # If syncing, request next block
             if len(data) == GET_BLOCKS_CHUNK:
@@ -594,8 +565,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     send_message(peer, command="blocks", data=blocks)
                     return
 
-            logger.info("couldn't serve get_blocks request")
-            send_message(peer, command="blocks", data=[])
+            # logger.info("couldn't serve get_blocks request")
+            # send_message(peer, command="blocks", data=[])
 
 def external_address(node):
     i = int(node[-1])
@@ -663,7 +634,7 @@ def main(args):
 
         node_id = int(os.environ["ID"])
 
-        duration = 30 * node_id
+        duration = 3 * node_id
         logger.info(f"sleeping {duration}")
         time.sleep(duration)
         logger.info("waking up")
