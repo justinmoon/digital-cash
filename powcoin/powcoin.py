@@ -132,9 +132,9 @@ class Block:
     @property
     def header(self):
         return serialize([
-            [t.id for t in self.txns],
+            self.txns,
             self.prev_id,
-            self.nonce
+            self.nonce,
         ])
 
     @property
@@ -292,7 +292,7 @@ class Node:
 
     def validate_block(self, block, validate_txns=False):
         # Check POW
-        assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
+        assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
 
         # Check txns if we're extending main chain
         if validate_txns:
@@ -537,7 +537,6 @@ class TCPHandler(socketserver.BaseRequestHandler):
                         mining_interrupt.set()
                     except Exception as e:
                         logger.info("Rejected block")
-                        pass
 
             # If syncing, request next block
             if len(data) == GET_BLOCKS_CHUNK:
