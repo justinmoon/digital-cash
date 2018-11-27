@@ -73,8 +73,8 @@ class Tx:
 
     @property
     def id(self):
-        # FIXME
-        return hashlib.sha256(f"Tx(tx_ins={self.tx_ins}, tx_outs={self.tx_outs})".encode()).hexdigest()
+        preimage = f"{self.tx_ins}:{self.tx_outs}".encode()
+        return hashlib.sha256(preimage).hexdigest()
 
     def __repr__(self):
         return f"Tx(id={self.id}, tx_ins={self.tx_ins}, tx_outs={self.tx_outs})"
