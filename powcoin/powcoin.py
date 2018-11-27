@@ -13,7 +13,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re
+import socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re
 
 import pprint
 
@@ -29,11 +29,8 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 # of sha256 of serialization of the block is less than POW_TARGET:
 # int(mining_hash(serialize(block)), 16) < POW_TARGET
 # BITS = 2
-BITS = 14
-POW_TARGET = 1 << (256 - BITS)
 GET_BLOCKS_CHUNK = 50
 BLOCK_SUBSIDY = 50
-ACTIVE_CHAIN_INDEX = 0
 PORT = 10000
 node = None
 chain_lock = threading.Lock()
@@ -77,7 +74,7 @@ class Tx:
     @property
     def id(self):
         # FIXME
-        return mining_hash(f"Tx(tx_ins={self.tx_ins}, tx_outs={self.tx_outs})")
+        return hashlib.sha256(f"Tx(tx_ins={self.tx_ins}, tx_outs={self.tx_outs})".encode()).hexdigest()
 
     def __repr__(self):
         return f"Tx(id={self.id}, tx_ins={self.tx_ins}, tx_outs={self.tx_outs})"
@@ -133,17 +130,24 @@ class Block:
         self.nonce = nonce
 
     @property
+    def header(self):
+        return serialize([
+            [t.id for t in self.txns],
+            self.prev_id,
+            self.nonce
+        ])
+
+    @property
     def id(self):
-        return mining_hash(self.header(self.nonce))
+        return hashlib.sha256(self.header).hexdigest()
 
-    def header(self, nonce):
-        return serialize([self.txns, nonce])
-
-    def __eq__(self, other):
-        return self.id == other.id
+    @property
+    def proof(self):
+        return int(self.id, 16)
 
     def __repr__(self):
-        return f"Block(prev_id={self.prev_id}, id={self.id} nonce={self.nonce})"
+        return f"Block(prev_id={self.prev_id[:10] if self.prev_id else self.prev_id}... id={self.id[:10]}...)"
+
 
 def txn_iterator(chain):
     return (
@@ -286,12 +290,12 @@ class Node:
                     return chain, chain_index, height
         return None, None, None
 
-    def validate_block(self, block):
+    def validate_block(self, block, validate_txns=False):
         # Check POW
         assert int(block.id, 16) < POW_TARGET, "Insufficient Proof-of-Work"
 
         # Check txns if we're extending main chain
-        if block.prev_id == self.chain[-1].id:
+        if validate_txns:
             self.validate_coinbase(block.txns[0])
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
@@ -303,9 +307,6 @@ class Node:
         if in_branch or in_chain:
             raise Exception("Duplicate block")
 
-        # First of all, validate thE block
-        self.validate_block(block)
-
         # Conditions used in if-statements below
         branch, branch_index, height = self.locate_in_branch(block.prev_id)
         extends_chain = block.prev_id == self.chain[-1].id
@@ -313,6 +314,9 @@ class Node:
             block.prev_id in [block.id for block in self.chain[:-1]]
         extends_branch = branch and height == len(branch) -1
         forks_branch = branch and height != len(branch) -1
+
+        # First of all, validate the block
+        self.validate_block(block, validate_txns=extends_chain)
 
         if extends_chain:
             # Add it to the chain
@@ -365,11 +369,12 @@ class Node:
         # Connect new blocks, rollback if error encountered
         for block in branch:
             try:
-                self.validate_block(block)
+                self.validate_block(block, validate_txns=True)
                 self.connect_block(block)
             except:
                 self.reorg(disconnected_blocks, branch_index, fork_index)
                 logger.info(f"Reorg failed")
+                return
 
     def connect_block(self, block):
         # Add to main chain
@@ -427,24 +432,19 @@ def prepare_coinbase(public_key, height):
 # Mining #
 ##########
 
+DIFFICULTY_BITS = 15
+POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 mining_interrupt = threading.Event()
 
-def mining_hash(s):
-    if not isinstance(s, bytes):
-        s = s.encode()
-    return hashlib.sha256(s).hexdigest()
 
-
-def mine_block(block, step=3):
-    nonce = int(os.environ["ID"])
-    # FIXME: make this line more readable
-    while int(mining_hash(block.header(nonce)), 16) >= POW_TARGET:
-        nonce += step  # Hack to make mining more competitive
+def mine_block(block):
+    while block.proof >= POW_TARGET:
+        # TODO: accept interrupts here if tip changes
         if mining_interrupt.is_set():
             logger.info("Mining interrupted")
             mining_interrupt.clear()
             return
-    block.nonce = nonce
+        block.nonce += 1
     return block
 
 
@@ -452,26 +452,27 @@ def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
         with chain_lock:
-            coinbase = prepare_coinbase(public_key, len(node.chain) - 1)
+            coinbase = prepare_coinbase(public_key, len(node.chain) -1)
             unmined_block = Block(
                 txns=[coinbase] + deepcopy(node.mempool),
                 prev_id=node.chain[-1].id,
+                nonce=random.randint(0, 1000000000),
             )
         mined_block = mine_block(unmined_block)
-        
-        # This is False if mining was interrupted
-        # Perhaps an exception would be wiser ...
+
         if mined_block:
             logger.info("")
             logger.info("Mined a block")
-            try:
-                with chain_lock:
-                    node.handle_block(mined_block)
-            except:
-                logger.info("\n\n\nmined block wasn't accepted""")
-                print_exc()
-                continue
+            with chain_lock:
+                # TODO conceivably this could fail ...
+                node.handle_block(mined_block)
 
+def mine_genesis_block(node, public_key):
+    coinbase = prepare_coinbase(public_key=public_key, height=0)
+    unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0)
+    mined_block = mine_block(unmined_block)
+    node.chain.append(mined_block)
+    node.add_to_utxo_set(coinbase)
 
 ##############
 # Networking #
@@ -619,7 +620,6 @@ def send_message(address, command, data, response=False, retries=3):
                 return read_message(s)
         except:
             logger.info("retrying")
-            # time.sleep(.1)
             return send_message(address, command, data, response, 
                          retries=retries-1)
             
@@ -644,13 +644,8 @@ def main(args):
         address = (f"node{node_id}", PORT)
         node = Node(address=address)
 
-        # Insert coinbase
-        # FIXME: this is a mess
-        genesis_coinbase = prepare_coinbase(public_key=user_public_key("alice"), height=0)
-        unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
-        mined_genesis_block = mine_block(unmined_genesis_block, step=1)
-        node.chain.append(mined_genesis_block)
-        node.add_to_utxo_set(genesis_coinbase)
+        # Mine genesis block
+        mine_genesis_block(node, user_public_key("alice"))
 
         # First thing, start server in another thread
         server_thread = threading.Thread(target=serve, name="server")
