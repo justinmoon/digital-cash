@@ -1,6 +1,7 @@
 from powcoin import *
 from pprint import pprint
 import identities as ids
+from copy import deepcopy
 
 node = Node("x")
 alice_node = Node("x")
@@ -14,15 +15,12 @@ def send_tx(n, sender_private_key, recipient_public_key, amount):
 # Alice mines the genesis block #
 #################################
 
-genesis_coinbase = prepare_coinbase(public_key=ids.alice_public_key, height=0)
-unmined_genesis_block = Block(txns=[genesis_coinbase], prev_id=None)
-mined_genesis_block = mine_block(unmined_genesis_block)
+mined_genesis_block = None
 
 # FIXME HACK
 print("Genesis mined")
 for n in [node, alice_node, bob_node]:
-    n.chain.append(mined_genesis_block)
-    n.add_to_utxo_set(genesis_coinbase)
+    mined_genesis_block = mine_genesis_block(n, ids.alice_public_key)
 print(mined_genesis_block)
 print()
 
@@ -80,7 +78,8 @@ assert node.chain == [
 # Alice triggers reorg attempt with a bad block #
 #################################################
 
-old_chain = list(node.chain)
+old_chain = deepcopy(node.chain)
+old_branches = deepcopy(node.branches)
 
 print("Alice's bad second fork block:") 
 coinbase = prepare_coinbase(ids.alice_public_key, height=3)
@@ -102,6 +101,7 @@ assert node.chain == [
     bob_fork_block,
 ]
 assert node.chain == old_chain
+assert node.branches == old_branches
 
 ###################################################################
 # Again, they both mine next block. Node discover's Alice's first #

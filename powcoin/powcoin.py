@@ -73,8 +73,7 @@ class Tx:
 
     @property
     def id(self):
-        preimage = f"{self.tx_ins}:{self.tx_outs}".encode()
-        return hashlib.sha256(preimage).hexdigest()
+        return hashlib.sha256(serialize(self)).hexdigest()
 
     def __repr__(self):
         return f"Tx(id={self.id}, tx_ins={self.tx_ins}, tx_outs={self.tx_outs})"
@@ -147,6 +146,9 @@ class Block:
 
     def __repr__(self):
         return f"Block(prev_id={self.prev_id[:10] if self.prev_id else self.prev_id}... id={self.id[:10]}...)"
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 
 def txn_iterator(chain):
@@ -473,6 +475,7 @@ def mine_genesis_block(node, public_key):
     mined_block = mine_block(unmined_block)
     node.chain.append(mined_block)
     node.add_to_utxo_set(coinbase)
+    return mined_block
 
 ##############
 # Networking #
