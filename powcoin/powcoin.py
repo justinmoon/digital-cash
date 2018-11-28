@@ -25,14 +25,14 @@ from utils import serialize, deserialize
 from identities import user_private_key, user_public_key, key_to_name, node_public_key
 
 
-# blocks must supply a nonce such that integer interpretation
-# of sha256 of serialization of the block is less than POW_TARGET:
-# int(mining_hash(serialize(block)), 16) < POW_TARGET
-# BITS = 2
 GET_BLOCKS_CHUNK = 50
 BLOCK_SUBSIDY = 50
 PORT = 10000
+DIFFICULTY_BITS = 2
+POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
+
 node = None
+mining_interrupt = threading.Event()
 chain_lock = threading.Lock()
 
 logging.basicConfig(level="DEBUG", format="%(threadName)-12s | %(message)s")
@@ -434,11 +434,6 @@ def prepare_coinbase(public_key, height):
 ##########
 # Mining #
 ##########
-
-DIFFICULTY_BITS = 2
-POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
-mining_interrupt = threading.Event()
-
 
 def mine_block(block):
     while block.proof >= POW_TARGET:
