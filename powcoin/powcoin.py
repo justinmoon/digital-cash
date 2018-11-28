@@ -28,7 +28,7 @@ from identities import user_private_key, user_public_key, key_to_name, node_publ
 GET_BLOCKS_CHUNK = 50
 BLOCK_SUBSIDY = 50
 PORT = 10000
-DIFFICULTY_BITS = 2
+DIFFICULTY_BITS = 17
 POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 
 node = None
