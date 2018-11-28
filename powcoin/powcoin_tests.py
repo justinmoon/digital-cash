@@ -1,4 +1,5 @@
 from copy import deepcopy
+import pytest
 import powcoin as p
 import identities as ids
 
@@ -170,14 +171,12 @@ def test_successful_reorg():
 
     # Alice accepts bob's first two blocks, but not the third
     p.mine_genesis_block(alice_node, ids.bob_public_key) # FIXME confusing
-    assert len(alice_node.chain) == 1
     alice_node.handle_block(b1)
-    assert len(alice_node.chain) == 2
 
     # FIXME just borrow everything up until this point from another test
     # Create and handle two blocks atop Alice's chain
-    a2 = mine_block(node, ids.alice_public_key, node.chain[1], [], 1)
-    alice_node.handle_block(a2)
+    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [], 1)
+    node.handle_block(a2)
 
     # Chains
     assert len(node.chain) == 3
@@ -217,12 +216,38 @@ def test_successful_reorg():
     assert bob_to_alice in node.mempool
 
 def test_unsuccessful_reorg():
+    node = p.Node(address="")
+    alice_node = p.Node(address="")
+
+    # Bob mines height=0,1,2
+    b0 = p.mine_genesis_block(node, ids.bob_public_key)
+    b1 = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
+    b2 = mine_block(node, ids.bob_public_key, node.chain[1], [], 2)
+
+    # Alice accepts bob's first two blocks, but not the third
+    p.mine_genesis_block(alice_node, ids.bob_public_key) # FIXME confusing
+    alice_node.handle_block(b1)
+
+    # FIXME just borrow everything up until this point from another test
     # Create one valid block for Alice
+    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [], 1)
+    node.handle_block(a2)
 
     # Create one invalid block for Alice
+    alice_to_bob = send_tx(alice_node, ids.alice_private_key, 
+                           ids.bob_public_key, 20)
+    # txn invalid b/c changing amount arbitrarily after signing ...
+    alice_to_bob.tx_outs[0].amount = 100000
 
-    # Exception raised
+    initial_utxo_set = deepcopy(node.utxo_set)
+    initial_chain = deepcopy(node.chain)
+    initial_branches = deepcopy(node.branches)
+
+    # This block shouldn't make it into branches or chain
+    a3 = mine_block(node, ids.alice_public_key, node.branches[0][0], 
+                    [alice_to_bob], 2)
 
     # UTXO, chain, branches unchanged
-
-    pass
+    assert str(node.utxo_set) == str(initial_utxo_set) # FIXME
+    assert node.chain == initial_chain
+    assert node.branches == initial_branches

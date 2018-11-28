@@ -198,6 +198,7 @@ class Node:
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
                 del self.utxo_set[tx_in.outpoint]
+
         # Save utxos which were just created
         for index, tx_out in enumerate(tx.tx_outs):
             utxo = UnspentTxOut(tx_id=tx.id, index=index, 
@@ -434,7 +435,7 @@ def prepare_coinbase(public_key, height):
 # Mining #
 ##########
 
-DIFFICULTY_BITS = 15
+DIFFICULTY_BITS = 2
 POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 mining_interrupt = threading.Event()
 
