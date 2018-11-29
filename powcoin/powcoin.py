@@ -13,16 +13,14 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re
+import socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re, pickle
 
 import pprint
 
 from docopt import docopt
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
-from utils import serialize, deserialize
 
-from identities import user_private_key, user_public_key, key_to_name, node_public_key
 
 
 GET_BLOCKS_CHUNK = 50
@@ -191,7 +189,7 @@ class Node:
     def initial_block_download(self):
         for peer in self.peers:
             block_ids = [block.id for block in self.chain][-50:]  # HACK
-            send_message(peer, "get_blocks", block_ids)
+            send_message(peer, "sync", block_ids)
 
     def add_to_utxo_set(self, tx):
         # Remove utxos that were just spent
@@ -510,9 +508,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             # Request their peers
             send_message(peer, "peers", None)
 
-        # FIXME
-        # assert peer in node.peers, \
-                # "rejecting message from unconnected peer"
+        assert peer in node.peers, "Rejecting message from unconnected peer"
 
         if command == "peers":
             send_message(peer, "peers-response", node.peers)
@@ -553,7 +549,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             utxos = node.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
-        if command == "get_blocks":
+        if command == "sync":
             # Find our most recent block they don't know about
             peer_block_ids = data
             for block in node.chain[::-1]:
@@ -564,7 +560,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     send_message(peer, command="blocks", data=blocks)
                     return
 
-            logger.info("couldn't serve get_blocks request")
+            logger.info("couldn't serve sync request")
             send_message(peer, command="blocks", data=[])
 
 def external_address(node):
@@ -573,9 +569,15 @@ def external_address(node):
     return ('127.0.0.1', port)
 
 def serve():
-    # server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
-    server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), TCPHandler)
+    server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
+    # server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
+
+def serialize(obj):
+    return pickle.dumps(obj)
+
+def deserialize(obj):
+    return pickle.loads(obj)
 
 def read_message(s):
     data = b''
@@ -617,7 +619,7 @@ def send_message(address, command, data, response=False, retries=3):
             if response:
                 return read_message(s)
         except:
-            logger.info("retrying")
+            logger.info("Retrying")
             return send_message(address, command, data, response, 
                          retries=retries-1)
             
@@ -626,6 +628,25 @@ def send_message(address, command, data, response=False, retries=3):
 # CLI #
 #######
 
+def lookup_private_key(keyword):
+    """
+    Hacky way to predictibly lookup private keys for "node ids" 
+    or "characters" ("bob" or "alice")
+    """
+    # Interpret integers as bank ID's
+    if isinstance(keyword, int):
+        # we add 100, so that first 100 integers can represent "characters"
+        exponent = 100 + keyword
+
+    # Otherwise, look up in this little registry of "characters"
+    else:
+        exponent = {"alice": 1, "bob": 2}[keyword]
+
+    return SigningKey.from_secret_exponent(exponent, curve=SECP256k1)
+
+def lookup_public_key(keyword):
+    return lookup_private_key(keyword).get_verifying_key()
+
 def main(args):
     if args["serve"]:
         threading.current_thread().name = "main"
@@ -633,17 +654,17 @@ def main(args):
         node_id = int(os.environ["ID"])
 
         duration = 3 * node_id
-        logger.info(f"sleeping {duration}")
+        logger.info(f"Sleeping {duration}")
         time.sleep(duration)
-        logger.info("waking up")
+        logger.info("Waking up")
 
-        # Set up the node (for convience, alice get coinbase coins)
+        # Set up the node
         global node
         address = (f"node{node_id}", PORT)
         node = Node(address=address)
 
-        # Mine genesis block
-        mine_genesis_block(node, user_public_key("alice"))
+        # Alice mines genesis block
+        mine_genesis_block(node, lookup_public_key("alice"))
 
         # First thing, start server in another thread
         server_thread = threading.Thread(target=serve, name="server")
@@ -665,7 +686,7 @@ def main(args):
         # Run the miner in a thread
         logger.info("starting miner")
         node_id = int(os.environ["ID"])
-        mining_public_key = node_public_key(node_id)
+        mining_public_key = lookup_public_key(node_id)
         miner_thread = threading.Thread(target=mine_forever, args=(mining_public_key,), name="miner")
         miner_thread.start()
 
@@ -673,20 +694,20 @@ def main(args):
         address = address_from_host(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
-        public_key = user_public_key(args["<name>"])
+        public_key = lookup_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         logger.info(response["data"])
     
     elif args["utxos"]:
-        public_key = user_public_key(args["<name>"])
+        public_key = lookup_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "utxos", public_key, response=True)
         logger.info(response["data"])
 
     elif args["tx"]:
         # Grab parameters
-        sender_private_key = user_private_key(args["<from>"])
+        sender_private_key = lookup_public_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
         recipient_private_key = user_private_key(args["<to>"])
         recipient_public_key = recipient_private_key.get_verifying_key()
