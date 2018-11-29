@@ -337,7 +337,7 @@ def main(args):
         miner_thread.start()
 
     elif args["ping"]:
-        address = address_from_host(args["--node"])
+        address = external_address(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
         public_key = user_public_key(args["<name>"])
