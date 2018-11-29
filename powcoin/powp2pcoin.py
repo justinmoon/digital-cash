@@ -1,18 +1,18 @@
 """
-POW P2P Coin
+POW Syndacoin
 
 Usage:
-  powp2pcoin.py.py serve
-  powp2pcoin.py.py ping [--node <node>]
-  powp2pcoin.py.py tx <from> <to> <amount> [--node <node>]
-  powp2pcoin.py.py balance <name> [--node <node>]
+  pow_syndacoin.py.py serve
+  pow_syndacoin.py.py ping [--node <node>]
+  pow_syndacoin.py.py tx <from> <to> <amount> [--node <node>]
+  pow_syndacoin.py.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, re
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random
 
 from docopt import docopt
 from copy import deepcopy
@@ -97,23 +97,11 @@ class Block:
 
 class Node:
 
-    def __init__(self, address):
+    def __init__(self):
         self.blocks = []
         self.utxo_set = {}
         self.mempool = []
-        # FIXME ugly
-        self.address = address
-        self.peers = set()
-        self.syncing = False
-
-    def join_network(self, peers):
-        for peer in peers:
-            if peer not in self.peers and peer != self.address:
-                try:
-                    send_message(peer, "join", None)
-                except:
-                    logger.info(f'Peer "{peer} offline"')
-                    continue
+        self.peer_addresses = {(p, PORT) for p in os.environ.get('PEERS', '').split(',') if p}
 
     @property
     def mempool_outpoints(self):
@@ -191,16 +179,8 @@ class Node:
         logger.info(f"Block accepted: height={len(self.blocks) - 1}")
 
         # Block propogation
-        for peer in self.peers:
-            send_message(peer, "block", block)
-
-    def initial_block_download(self):
-        # just talk to one peer for now
-        if self.peers:
-            peer = next(iter(self.peers))
-            send_message(peer, "get_blocks", self.blocks[-1].id)
-        else:
-            logger.info("(ibd) no peers")
+        for peer_address in self.peer_addresses:
+            send_message(peer_address, "block", block)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -285,81 +265,26 @@ def prepare_message(command, data):
 
 class TCPHandler(socketserver.BaseRequestHandler):
 
-    def get_canonical_peer_address(self):
-        address = self.client_address[0]
-        try:
-            raw_host_info = socket.gethostbyaddr(address)
-            hostname = re.search(r"_(.*?)_", raw_host_info[0]).group(1)
-        except:
-            hostname = address
-        return (hostname, PORT)
-
-
     def respond(self, command, data):
         response = prepare_message(command, data)
         return self.request.sendall(serialize(response))
 
     def handle(self):
-        peer = self.get_canonical_peer_address()
         message_bytes = self.request.recv(1024*4).strip()
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
 
-        # logger.info(f"received {command}")
+        logger.info(f"received {command}")
 
-        if command == "join":
-            # Accept the connection. Add them to our list of peers
-            node.peers.add(peer)
-            logger.info(f'Now connected to {peer[0]}"')
-            send_message(peer, "join-response", None)
-
-        if command == "join-response":
-            node.peers.add(peer)
-            logger.info(f'Now connected to {peer[0]}"')
-            # Request the peer's peers
-            send_message(peer, "peers", None)
-
-        assert peer in node.peers, \
-                "rejecting message from unconnected peer"
-
-        if command == "peers":
-            send_message(peer, "peers-response", node.peers)
-
-        if command == "peers-response":
-            node.join_network(data)
-            logger.info(f"received peers: {data}")
-
-        # Non-handshake messages require authentication
         if command == "ping":
             self.respond(command="pong", data="")
 
         if command == "block":
-            if data == None:
-                logger.info(f"Initial block download complete")
-                node.syncing = False
-                return
-
             if data.prev_id == node.blocks[-1].id:
                 node.handle_block(data)
                 # Interrupt mining thread
                 mining_interrupt.set()
-
-            # If syncing, request next block
-            if node.syncing:
-                node.initial_block_download()
-
-        if command == "get_blocks":
-            next_block = None
-            # locate the block in the main chain
-            # FIXME: this should call a general-purpose function
-            for block in node.blocks:
-                if block.prev_id == data:
-                    next_block = block
-                    break
-
-            send_message(peer, command="block", data=next_block)
-            logger.info(f"continue ibd")
 
         if command == "tx":
             node.handle_tx(data)
@@ -396,18 +321,9 @@ def send_message(address, command, data, response=False):
 #######
 
 def main(args):
-    logger.info(os.environ)
     if args["serve"]:
-        threading.current_thread().name = "main"
-
         global node
-        hostname = os.environ['ME']
-        address = (hostname, PORT)
-        node = Node(address)
-
-        node_id = int(hostname[-1])
-        duration = 10 * node_id
-        time.sleep(duration)
+        node = Node()
         
         # TODO: mine genesis block
         mine_genesis_block()
@@ -415,26 +331,6 @@ def main(args):
         # Start server thread
         server_thread = threading.Thread(target=serve, name="server")
         server_thread.start()
-
-        # Join the network
-        peers = {(p, PORT) for p in os.environ['PEERS'].split(',')}
-
-        try:
-            node.join_network(peers)
-        except:
-            # Peer not online yet
-            pass
-
-        # time for responses
-        time.sleep(1)
-
-        # Do initial block download
-        logger.info("starting ibd")
-        node.syncing = True
-        node.initial_block_download()
-        
-        while node.syncing:
-            time.sleep(1)
 
         # Start miner thread
         miner_thread = threading.Thread(target=mine_forever, name="miner")
