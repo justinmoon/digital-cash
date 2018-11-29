@@ -2,10 +2,10 @@
 POW Syndacoin
 
 Usage:
-  pow_syndacoin.py.py serve
-  pow_syndacoin.py.py ping [--node <node>]
-  pow_syndacoin.py.py tx <from> <to> <amount> [--node <node>]
-  pow_syndacoin.py.py balance <name> [--node <node>]
+  powp2pcoin.py.py serve
+  powp2pcoin.py.py ping [--node <node>]
+  powp2pcoin.py.py tx <from> <to> <amount> [--node <node>]
+  powp2pcoin.py.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
@@ -18,10 +18,8 @@ from docopt import docopt
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 
-from identities import user_private_key, user_public_key
-
-
 GET_BLOCKS_CHUNK = 10
+BLOCK_SUBSIDY = 50
 PORT = 10000
 node = None
 
@@ -52,6 +50,10 @@ class Tx:
         tx_in = self.tx_ins[index]
         message = spend_message(self, index)
         return public_key.verify(tx_in.signature, message)
+
+    @property
+    def is_coinbase(self):
+        return isinstance(self.tx_ins[0].signature, int)
 
 class TxIn:
 
@@ -129,9 +131,10 @@ class Node:
                 if tx_out.public_key == public_key]
 
     def update_utxo_set(self, tx):
-        # Remove utxos that were just spent
-        for tx_in in tx.tx_ins:
-            del self.utxo_set[tx_in.outpoint]
+        # Remove utxos that were just spent (coinbases don't spend utxos)
+        if not tx.is_coinbase:
+            for tx_in in tx.tx_ins:
+                del self.utxo_set[tx_in.outpoint]
         # Save utxos which were just created
         for tx_out in tx.tx_outs:
             self.utxo_set[tx_out.outpoint] = tx_out
@@ -182,12 +185,15 @@ class Node:
         # Check work, chain ordering
         self.validate_block(block)
 
+        # Validate coinbase transaction separately
+        self.validate_coinbase(block.txns[0])
+
         # Check the transactions are valid
-        for tx in block.txns:
+        for tx in block.txns[:1]:
             self.validate_tx(tx)
 
         # If they're all good, update self.blocks and self.utxo_set
-        for tx in block.txns:
+        for tx in block.txns[:1]:
             self.update_utxo_set(tx)
         
         # Add the block to our chain
@@ -228,6 +234,17 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     for i in range(len(tx.tx_ins)):
         tx.sign_input(i, sender_private_key)
 
+def prepare_coinbase(public_key, height):
+    # Put height in signature field so coinbase hashes don't collide
+    return Tx(
+        tx_ins=[
+            TxIn(None, None, height)
+        ],
+        tx_outs=[
+            TxOut(amount=BLOCK_SUBSIDY, public_key=public_key), 
+        ],
+    )
+
 ##########
 # Mining #
 ##########
@@ -248,11 +265,12 @@ def mine_block(block):
     return block
 
 
-def mine_forever():
+def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
+        coinbase = prepare_coinbase(public_key, len(node.chain) -1)
         unmined_block = Block(
-            txns=node.mempool,
+            txns=[coinbase] + deepcopy(node.mempool),
             prev_id=node.blocks[-1].id,
             nonce=random.randint(0, 1000000000),
         )
@@ -263,12 +281,12 @@ def mine_forever():
             logger.info("Mined a block")
             node.handle_block(mined_block)
 
-def mine_genesis_block():
-    global node
+def mine_genesis_block(node, public_key):
+    coinbase = prepare_coinbase(public_key=public_key, height=0)
     unmined_block = Block(txns=[], prev_id=None, nonce=0)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
-    # TODO: update utxo set, award coinbase, etc
+    node.update_utxo_set(coinbase)
 
 
 ##############
@@ -430,6 +448,25 @@ def send_message(address, command, data, response=False):
 # CLI #
 #######
 
+def lookup_private_key(keyword):
+    """
+    Hacky way to predictibly lookup private keys for "node ids" 
+    or "characters" ("bob" or "alice")
+    """
+    # Interpret integers as bank ID's
+    if isinstance(keyword, int):
+        # we add 100, so that first 100 integers can represent "characters"
+        exponent = 100 + keyword
+
+    # Otherwise, look up in this little registry of "characters"
+    else:
+        exponent = {"alice": 1, "bob": 2}[keyword]
+
+    return SigningKey.from_secret_exponent(exponent, curve=SECP256k1)
+
+def lookup_public_key(keyword):
+    return lookup_private_key(keyword).get_verifying_key()
+
 def main(args):
     if args["serve"]:
 
@@ -445,8 +482,8 @@ def main(args):
         address = (f"node{node_id}", PORT)
         node = Node(address=address)
         
-        # mine genesis block
-        mine_genesis_block()
+        # Alice mines genesis block
+        mine_genesis_block(node, lookup_public_key("alice"))
 
         # Start server thread
         server_thread = threading.Thread(target=serve, name="server")
@@ -469,22 +506,23 @@ def main(args):
 
         time.sleep(1)  # let sync happen
         # Start miner thread
-        miner_thread = threading.Thread(target=mine_forever, name="miner")
+        miner_thread = threading.Thread(
+                target=mine_forever, args=[lookup_public_key(node_id)], name="miner")
         miner_thread.start()
 
     elif args["ping"]:
         address = external_address(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
-        public_key = user_public_key(args["<name>"])
+        public_key = lookup_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         print(response["data"])
     elif args["tx"]:
         # Grab parameters
-        sender_private_key = user_private_key(args["<from>"])
+        sender_private_key = lookup_public_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
-        recipient_private_key = user_private_key(args["<to>"])
+        recipient_private_key = lookup_public_key(args["<to>"])
         recipient_public_key = recipient_private_key.get_verifying_key()
         amount = int(args["<amount>"])
         address = external_address(args["--node"])
