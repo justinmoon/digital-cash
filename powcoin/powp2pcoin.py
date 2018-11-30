@@ -12,7 +12,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, pickle
+import socketserver, socket, sys, argparse, time, os, logging, threading, hashlib, random, pickle
 
 from docopt import docopt
 from copy import deepcopy
@@ -36,8 +36,7 @@ def spend_message(tx, index):
 
 class Tx:
 
-    def __init__(self, id, tx_ins, tx_outs):
-        self.id = id
+    def __init__(self, tx_ins, tx_outs):
         self.tx_ins = tx_ins
         self.tx_outs = tx_outs
 
@@ -50,6 +49,10 @@ class Tx:
         tx_in = self.tx_ins[index]
         message = spend_message(self, index)
         return public_key.verify(tx_in.signature, message)
+
+    @property
+    def id(self):
+        return hashlib.sha256(serialize(self)).hexdigest()
 
     @property
     def is_coinbase(self):
@@ -67,6 +70,13 @@ class TxIn:
         return (self.tx_id, self.index)
 
 class TxOut:
+
+    def __init__(self, amount, public_key):
+        self.amount = amount
+        self.public_key = public_key
+
+class UnspentTxOut:
+    # "TxIn.outpoint" + "TxOut"
 
     def __init__(self, tx_id, index, amount, public_key):
         self.tx_id = tx_id
@@ -127,21 +137,24 @@ class Node:
         return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
 
     def fetch_utxos(self, public_key):
-        return [tx_out for tx_out in self.utxo_set.values() 
+        return [UnspentTxOut(tx_id=tx_id, index=index, 
+                    amount=tx_out.amount, public_key=tx_out.public_key)
+                for ((tx_id, index), tx_out) in self.utxo_set.values() 
                 if tx_out.public_key == public_key]
 
     def update_utxo_set(self, tx):
         # Remove utxos that were just spent (coinbases don't spend utxos)
-        if not tx.is_coinbase:
-            for tx_in in tx.tx_ins:
-                del self.utxo_set[tx_in.outpoint]
+        for tx_in in tx.tx_ins[1:]:
+            del self.utxo_set[tx_in.outpoint]
+
         # Save utxos which were just created
-        for tx_out in tx.tx_outs:
-            self.utxo_set[tx_out.outpoint] = tx_out
+        for index, tx_out in enumerate(tx.tx_outs):
+            self.utxo_set[(tx.id, index)] = tx_out
 
     def fetch_balance(self, public_key):
         # Fetch utxos associated with this public key
         utxos = self.fetch_utxos(public_key)
+
         # Sum the amounts
         return sum([tx_out.amount for tx_out in utxos])
 
@@ -173,6 +186,11 @@ class Node:
         # Check no value created or destroyed
         assert in_sum == out_sum
 
+    def validate_coinbase(self, tx):
+        assert len(tx.tx_ins) == 1
+        assert len(tx.tx_outs) == 1
+        assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
+
     def handle_tx(self, tx):
         self.validate_tx(tx)
         self.mempool.append(tx)
@@ -189,11 +207,11 @@ class Node:
         self.validate_coinbase(block.txns[0])
 
         # Check the transactions are valid
-        for tx in block.txns[:1]:
+        for tx in block.txns[1:]:
             self.validate_tx(tx)
 
         # If they're all good, update self.blocks and self.utxo_set
-        for tx in block.txns[:1]:
+        for tx in block.txns[1:]:
             self.update_utxo_set(tx)
         
         # Add the block to our chain
@@ -222,15 +240,14 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     assert tx_in_sum >= amount
 
     # Construct tx.tx_outs
-    tx_id = uuid.uuid4()
     change = tx_in_sum - amount
     tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
-        TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
+        TxOut(amount=amount, public_key=recipient_public_key), 
+        TxOut(amount=change, public_key=sender_public_key),
     ]
 
     # Construct tx and sign inputs
-    tx = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)
+    tx = Tx(tx_ins=tx_ins, tx_outs=tx_outs)
     for i in range(len(tx.tx_ins)):
         tx.sign_input(i, sender_private_key)
 
@@ -249,7 +266,7 @@ def prepare_coinbase(public_key, height):
 # Mining #
 ##########
 
-DIFFICULTY_BITS = 17
+DIFFICULTY_BITS = 16
 POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 mining_interrupt = threading.Event()
 
@@ -268,7 +285,7 @@ def mine_block(block):
 def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
-        coinbase = prepare_coinbase(public_key, len(node.chain) -1)
+        coinbase = prepare_coinbase(public_key, len(node.blocks) -1)
         unmined_block = Block(
             txns=[coinbase] + deepcopy(node.mempool),
             prev_id=node.blocks[-1].id,
@@ -341,7 +358,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
         peer = self.get_canonical_peer_address()
         # FIXME: let's add message length here ...
         # message = read_message(self.request)
-        message_bytes = self.request.recv(1024).strip()
+        message_bytes = self.request.recv(4*1024).strip()
         message = deserialize(message_bytes)
 
         command = message["command"]
@@ -472,7 +489,7 @@ def main(args):
 
         # Hack to start nodes at different times
         node_id = int(os.environ["ID"])
-        duration = 20 * node_id
+        duration = 3 * node_id
         logger.info(f"Sleeping {duration}")
         time.sleep(duration)
         logger.info("Waking up")
