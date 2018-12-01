@@ -107,15 +107,16 @@ class Node:
         self.utxo_set = {}
         self.mempool = []
         self.peers = []
+        self.pending_peers = []
 
     def connect(self, peer):
-        # if peer not in self.peers and peer != self.address:
         if peer not in self.peers and peer != self.address:
-            send_message(peer, "connect", None)
-
-    def handle_peer(self, peer):
-        if peer not in self.peers and peer != self.address:
-            node.peers.append(peer)
+            logger.info(f'(handshake) Sent "connect" to {peer[0]}')
+            try:
+                send_message(peer, "connect", None)
+                self.pending_peers.append(peer)
+            except:
+                logger.info(f'(handshake) Node "{peer[0]} offline"')
 
     @property
     def mempool_outpoints(self):
@@ -331,30 +332,32 @@ class TCPHandler(socketserver.BaseRequestHandler):
         command = message["command"]
         data = message["data"]
 
-
+        # Handshake / Authentication
         if command == "connect":
-            node.handle_peer(peer)
-            logger.info(f'Connected to "{peer[0]}"')
-            send_message(peer, "connect-response", None)
+            if peer not in node.pending_peers and peer not in node.peers:
+                node.pending_peers.append(peer)
+                logger.info(f'(handshake) Accepted "connect" request from {peer[0]}')
+                send_message(peer, "connect-response", None)
 
-        if command == "connect-response":
-            node.handle_peer(peer)
-            logger.info(f'Connected to "{peer[0]}"')
+        elif command == "connect-response":
+            if peer in node.pending_peers and peer not in node.peers:
+                node.pending_peers.remove(peer)
+                node.peers.append(peer)
+                logger.info(f'(handshake) Connected to {peer[0]}"')
+                send_message(peer, "connect-response", None)
 
-            # Request their peers
-            send_message(peer, "peers", None)
+                # Request their peers
+                send_message(peer, "peers", None)
 
-        # assert peer in node.peers, "Rejecting message from unconnected peer"
+        else:
+            assert peer in node.peers, f"Rejecting {command} message from unconnected peer"
 
         if command == "peers":
             send_message(peer, "peers-response", node.peers)
 
         if command == "peers-response":
             for peer in data:
-                try:
-                    node.connect(peer)
-                except:
-                    logger.info(f'Node "{peer[0]}" offline')
+                node.connect(peer)
 
         if command == "ping":
             self.respond(command="pong", data="")
@@ -410,6 +413,7 @@ def lookup_public_key(name):
 
 def main(args):
     if args["serve"]:
+        threading.current_thread().name = "main"
         name = os.environ["NAME"]
 
         global node
@@ -425,10 +429,7 @@ def main(args):
         # Join the network
         peers = [(p, PORT) for p in os.environ['PEERS'].split(',')]
         for peer in peers:
-            try:
-                node.connect(peer)
-            except:
-                logger.info(f'Node "{peer[0]} offline"')
+            node.connect(peer)
 
         # Start miner thread
         miner_public_key = lookup_public_key(name)
