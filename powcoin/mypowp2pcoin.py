@@ -19,9 +19,6 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 from utils import serialize, deserialize
 
-from identities import user_private_key, user_public_key
-
-
 PORT = 10000
 BLOCK_SUBSIDY = 50
 node = None
@@ -54,6 +51,9 @@ class Tx:
     @property
     def is_coinbase(self):
         return self.tx_ins[0].tx_id is None
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 class TxIn:
 
@@ -126,6 +126,10 @@ class Node:
         for tx_out in tx.tx_outs:
             self.utxo_set[tx_out.outpoint] = tx_out
 
+        # Clean up mempool
+        if tx in self.mempool:
+            self.mempool.remove(tx)
+
     def fetch_balance(self, public_key):
         # Fetch utxos associated with this public key
         utxos = self.fetch_utxos(public_key)
@@ -138,9 +142,6 @@ class Node:
         for index, tx_in in enumerate(tx.tx_ins):
             # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo_set
-
-            # No pending transactions spending this same output
-            assert tx_in.outpoint not in self.mempool_outpoints
 
             # Grab the tx_out
             tx_out = self.utxo_set[tx_in.outpoint]
@@ -160,9 +161,18 @@ class Node:
         # Check no value created or destroyed
         assert in_sum == out_sum
 
+    def validate_coinbase(self, tx):
+        assert len(tx.tx_ins) == len(tx.tx_outs) == 1
+        assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
+
     def handle_tx(self, tx):
-        self.validate_tx(tx)
-        self.mempool.append(tx)
+        if tx not in self.mempool:
+            self.validate_tx(tx)
+            self.mempool.append(tx)
+
+            # Propogate transaction
+            for peer_address in self.peer_addresses:
+                send_message(peer_address, "tx", tx)
 
     def validate_block(self, block):
         assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
@@ -172,7 +182,7 @@ class Node:
         # Check work, chain ordering
         self.validate_block(block)
 
-        # Validate coinbase transaction separately
+        # Validate coinbase separately
         self.validate_coinbase(block.txns[0])
 
         # Check the transactions are valid
@@ -220,25 +230,27 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     for i in range(len(tx.tx_ins)):
         tx.sign_input(i, sender_private_key)
 
-def prepare_coinbase(public_key):
-    tx_id = uuid.uuid4()
+    return tx
+
+def prepare_coinbase(public_key, tx_id=None):
+    if tx_id is None:
+        tx_id = uuid.uuid4()
     return Tx(
         id=tx_id,
         tx_ins=[
-            TxIn(tx_id=None, index=None, signature=None),
+            TxIn(None, None, None),    
         ],
         tx_outs=[
-            TxOut(tx_id=tx_id, index=0, amount=BLOCK_SUBSIDY, 
-                public_key=public_key)
+            TxOut(tx_id=tx_id, index=0, amount=BLOCK_SUBSIDY,
+                  public_key=public_key),
         ],
     )
-
 
 ##########
 # Mining #
 ##########
 
-DIFFICULTY_BITS = 20
+DIFFICULTY_BITS = 17
 POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 mining_interrupt = threading.Event()
 
@@ -259,7 +271,7 @@ def mine_forever(public_key):
     while True:
         coinbase = prepare_coinbase(public_key)
         unmined_block = Block(
-            txns=[coinbase] + deepcopy(node.mempool),
+            txns=[coinbase] + node.mempool,
             prev_id=node.blocks[-1].id,
             nonce=random.randint(0, 1000000000),
         )
@@ -272,12 +284,11 @@ def mine_forever(public_key):
 
 def mine_genesis_block(public_key):
     global node
-    coinbase = prepare_coinbase(public_key)
+    coinbase = prepare_coinbase(public_key, tx_id="abc123")
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.update_utxo_set(coinbase)
-
 
 ##############
 # Networking #
@@ -346,37 +357,23 @@ def send_message(address, command, data, response=False):
 # CLI #
 #######
 
-def lookup_private_key(keyword):
-    """
-    Hacky way to predictibly lookup private keys for "node ids" 
-    or "characters" ("bob" or "alice")
-    """
-    # Cast to int if possible
-    if keyword.is_digit(): 
-        keyword = int(keyword)
-
-    # Interpret integers as bank ID's
-    if isinstance(keyword, int):
-        # we add 100, so that first 100 integers can represent "characters"
-        exponent = 100 + keyword
-
-    # Otherwise, look up in this little registry of "characters"
-    else:
-        exponent = {"alice": 1, "bob": 2}[keyword]
-
+def lookup_private_key(name):
+    exponent = {
+        "alice": 1, "bob": 2, "node0": 3, "node1": 4, "node2": 5
+    }[name]
     return SigningKey.from_secret_exponent(exponent, curve=SECP256k1)
 
-def lookup_public_key(keyword):
-    return lookup_private_key(keyword).get_verifying_key()
+def lookup_public_key(name):
+    return lookup_private_key(name).get_verifying_key()
 
 def main(args):
     if args["serve"]:
-        node_id = int(os.environ["ID"])
+        name = os.environ["NAME"]
 
         global node
         node = Node()
-        
-        # TODO: mine genesis block
+
+        # Alice is Satoshi!
         mine_genesis_block(lookup_public_key("alice"))
 
         # Start server thread
@@ -384,23 +381,24 @@ def main(args):
         server_thread.start()
 
         # Start miner thread
-        miner_thread = threading.Thread(
-                target=mine_forever, args=[lookup_public_key(node_id)], name="miner")
+        miner_public_key = lookup_public_key(name)
+        miner_thread = threading.Thread(target=mine_forever, 
+                args=[miner_public_key], name="miner")
         miner_thread.start()
 
     elif args["ping"]:
         address = external_address(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
-        public_key = user_public_key(args["<name>"])
+        public_key = lookup_public_key(args["<name>"])
         address = external_address(args["--node"])
         response = send_message(address, "balance", public_key, response=True)
         print(response["data"])
     elif args["tx"]:
         # Grab parameters
-        sender_private_key = user_private_key(args["<from>"])
+        sender_private_key = lookup_private_key(args["<from>"])
         sender_public_key = sender_private_key.get_verifying_key()
-        recipient_private_key = user_private_key(args["<to>"])
+        recipient_private_key = lookup_private_key(args["<to>"])
         recipient_public_key = recipient_private_key.get_verifying_key()
         amount = int(args["<amount>"])
         address = external_address(args["--node"])
