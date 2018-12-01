@@ -52,6 +52,9 @@ class Tx:
     def is_coinbase(self):
         return self.tx_ins[0].tx_id is None
 
+    def __eq__(self, other):
+        return self.id == other.id
+
 class TxIn:
 
     def __init__(self, tx_id, index, signature=None):
@@ -123,7 +126,7 @@ class Node:
         for tx_out in tx.tx_outs:
             self.utxo_set[tx_out.outpoint] = tx_out
 
-        # Update mempool
+        # Clean up mempool
         if tx in self.mempool:
             self.mempool.remove(tx)
 
@@ -139,9 +142,6 @@ class Node:
         for index, tx_in in enumerate(tx.tx_ins):
             # TxIn spending an unspent output
             assert tx_in.outpoint in self.utxo_set
-
-            # No pending transactions spending this same output
-            assert tx_in.outpoint not in self.mempool_outpoints
 
             # Grab the tx_out
             tx_out = self.utxo_set[tx_in.outpoint]
@@ -166,8 +166,13 @@ class Node:
         assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
 
     def handle_tx(self, tx):
-        self.validate_tx(tx)
-        self.mempool.append(tx)
+        if tx not in self.mempool:
+            self.validate_tx(tx)
+            self.mempool.append(tx)
+
+            # Propogate transaction
+            for peer_address in self.peer_addresses:
+                send_message(peer_address, "tx", tx)
 
     def validate_block(self, block):
         assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
@@ -225,6 +230,8 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     for i in range(len(tx.tx_ins)):
         tx.sign_input(i, sender_private_key)
 
+    return tx
+
 def prepare_coinbase(public_key, tx_id=None):
     if tx_id is None:
         tx_id = uuid.uuid4()
@@ -243,7 +250,7 @@ def prepare_coinbase(public_key, tx_id=None):
 # Mining #
 ##########
 
-DIFFICULTY_BITS = 20
+DIFFICULTY_BITS = 17
 POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
 mining_interrupt = threading.Event()
 

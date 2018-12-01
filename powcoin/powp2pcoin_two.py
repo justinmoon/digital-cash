@@ -135,7 +135,7 @@ class Node:
         for tx_out in tx.tx_outs:
             self.utxo_set[tx_out.outpoint] = tx_out
 
-        # Update mempool
+        # Clean up mempool
         if tx in self.mempool:
             self.mempool.remove(tx)
 
@@ -179,6 +179,7 @@ class Node:
             self.validate_tx(tx)
             self.mempool.append(tx)
 
+            # Propogate transaction
             for peer in self.peers:
                 send_message(peer, "tx", tx)
 
