@@ -4,8 +4,9 @@ lock = threading.Lock()
 
 numbers = [0]
 
-def counter():
-    """Add next number onto list, with a rondom sleep between reading and writing"""
+def counter(random=False):
+    """Add next number onto list, with a random 
+    sleep between reading and writing"""
     while numbers[-1] < 20:
         val = numbers[-1] + 1
         time.sleep(.01*random.randint(1, 10))
@@ -20,7 +21,7 @@ def run(target):
 
     # Start threads
     for i in range(10):
-        thread = threading.Thread(target=target, args=[])
+        thread = threading.Thread(target=target)
         thread.start()
         threads.append(thread)
 
