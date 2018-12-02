@@ -103,21 +103,19 @@ class Block:
         return int(self.id, 16)
 
     def __eq__(self, other):
-            return self.id == other.id
-
-    def __repr__(self):
-        return f"Block(prev_id={self.prev_id[:10]}... id={self.id[:10]}...)"
+        return self.id == other.id
 
 def total_work(chain):
     return len(chain)
 
 def tx_in_to_tx_out(tx_in, chain):
     for block in chain:
-        for tx in block:
+        for tx in block.txns:
             if tx.id == tx_in.tx_id:
                 tx_out = tx.tx_outs[tx_in.index]
                 return TxOut(tx_id=tx_in.tx_id, index=tx_in.index,
                        amount=tx_out.amount, public_key=tx_out.public_key)
+
 
 class Node:
 
@@ -145,7 +143,17 @@ class Node:
         for peer in self.peers:
             send_message(peer, "sync", block_ids)
 
-    def add_to_utxo_set(self, tx):
+    def fetch_utxos(self, public_key):
+        return [tx_out for tx_out in self.utxo_set.values() 
+                if tx_out.public_key == public_key]
+
+    def fetch_balance(self, public_key):
+        # Fetch utxos associated with this public key
+        utxos = self.fetch_utxos(public_key)
+        # Sum the amounts
+        return sum([tx_out.amount for tx_out in utxos])
+
+    def connect_tx(self, tx):
         # Remove utxos that were just spent
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
@@ -162,12 +170,12 @@ class Node:
             self.mempool.remove(tx)
             logging.info(f"Removed tx from mempool")
 
-    def remove_from_utxo_set(self, tx):
+    def disconnect_tx(self, tx):
         # tx.tx_ins put back in self.utxo_set
         if not tx.is_coinbase:
             for tx_in in tx.tx_ins:
-                utxo = tx_in_to_tx_out(tx_in, self.chain)
-                self.utxo_set[utxo.outpoint] = utxo
+                tx_out = tx_in_to_tx_out(tx_in, self.chain)
+                self.utxo_set[tx_out.outpoint] = tx_out
 
         # tx.tx_outs removed from utxo_set
         for index in range(len(tx.tx_outs)):
@@ -178,30 +186,6 @@ class Node:
         if tx not in self.mempool and not tx.is_coinbase:
             self.mempool.append(tx)
             logging.info(f"Added tx to mempool")
-
-    def fetch_utxos(self, public_key):
-        return [tx_out for tx_out in self.utxo_set.values() 
-                if tx_out.public_key == public_key]
-
-    def update_utxo_set(self, tx):
-        # Remove utxos that were just spent
-        if not tx.is_coinbase:
-            for tx_in in tx.tx_ins:
-                del self.utxo_set[tx_in.outpoint]
-
-        # Save utxos which were just created
-        for tx_out in tx.tx_outs:
-            self.utxo_set[tx_out.outpoint] = tx_out
-
-        # Clean up mempool
-        if tx in self.mempool:
-            self.mempool.remove(tx)
-
-    def fetch_balance(self, public_key):
-        # Fetch utxos associated with this public key
-        utxos = self.fetch_utxos(public_key)
-        # Sum the amounts
-        return sum([tx_out.amount for tx_out in utxos])
 
     def validate_tx(self, tx):
         in_sum = 0
@@ -263,13 +247,14 @@ class Node:
         in_branch = self.locate_in_branch(block.id)[0]
         in_chain = block in self.chain
         if in_branch or in_chain:
-            raise Exception("Duplicate block")
+            raise Exception("Duplicate")
+
+        branch, branch_index, height = self.locate_in_branch(block.prev_id)
 
         # Conditions used in if-statements below
-        branch, branch_index, height = self.locate_in_branch(block.prev_id)
         extends_chain = block.prev_id == self.chain[-1].id
-        forks_chain = not branch and \
-            block.prev_id in [block.id for block in self.chain[:-1]]
+        forks_chain = not branch and block.prev_id in \
+                [block.id for block in self.chain]
         extends_branch = branch and height == len(branch) -1
         forks_branch = branch and height != len(branch) -1
 
@@ -290,10 +275,9 @@ class Node:
             logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
             # Reorg if branch now has more work than main chain
-            # FIXME
-            chain_ids = [b.id for b in self.chain]
-
-            chain_since_fork = self.chain[chain_ids.index(branch[0].prev_id)+1:]
+            fork_block_id = branch[0].prev_id
+            fork_index = [block.id for block in self.chain].index(fork_block_id)
+            chain_since_fork = self.chain[fork_index+1:]
             if total_work(branch) > total_work(chain_since_fork):
                 logger.info(f"Reorging to branch {branch_index}")
                 self.reorg(branch, branch_index, height)
@@ -303,9 +287,8 @@ class Node:
             logger.info(f"Created (fork) branch {len(self.branches)} to height {len(self.branches[-1])}")
         else:
             # Re-enter IBD to find parent blocks
-            logger.info("DOWNLOADING MISSING BLOCKS")
             self.sync()
-            raise Exception("Can't connect block. Searching for parent.")
+            raise Exception("Unknown parent")
 
         # If there were no problems, tell peers
         for peer in self.peers:
@@ -317,7 +300,7 @@ class Node:
         while self.chain[-1].id != branch[0].prev_id:
             block = self.chain.pop()
             for tx in block.txns:
-                self.remove_from_utxo_set(tx)
+                self.disconnect_tx(tx)
             disconnected_blocks.insert(0, block)
 
         # Replace branch with newly disconnected blocks
@@ -338,7 +321,7 @@ class Node:
         self.chain.append(block)
         # Update utxo set
         for tx in block.txns:
-            self.add_to_utxo_set(tx)
+            self.connect_tx(tx)
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -421,13 +404,13 @@ def mine_forever(public_key):
             with lock:
                 node.handle_block(mined_block)
 
-def mine_genesis_block(public_key):
-    global node
+def mine_genesis_block(node, public_key):
     coinbase = prepare_coinbase(public_key, tx_id="abc123")
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0)
     mined_block = mine_block(unmined_block)
     node.chain.append(mined_block)
-    node.update_utxo_set(coinbase)
+    node.connect_tx(coinbase)
+    return mined_block
 
 ##############
 # Networking #
@@ -549,9 +532,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     with lock:
                         node.handle_block(block)
                     mining_interrupt.set()
-                except:
-                    # print_exc()
-                    logger.info("Rejected block")
+                except Exception as e:
+                    logger.info(f"Rejected block: {e}")
 
             if len(data) == GET_BLOCKS_CHUNK:
                 node.sync()
