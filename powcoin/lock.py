@@ -4,12 +4,13 @@ lock = threading.Lock()
 
 numbers = [0]
 
-def counter(random=False):
+def counter():
     """Add next number onto list, with a random 
     sleep between reading and writing"""
     while numbers[-1] < 20:
         val = numbers[-1] + 1
-        time.sleep(.01*random.randint(1, 10))
+        # time.sleep(.01*random.randint(1, 10))
+        time.sleep(.01)
         numbers.append(val)
 
 def counter_with_lock():
