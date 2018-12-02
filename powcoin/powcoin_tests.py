@@ -1,6 +1,8 @@
 from copy import deepcopy
 import pytest
-import powcoin as p
+import mypowp2pcoin as p
+# import powp2pcoin_five as p
+# import powcoin as p
 import identities as ids
 
 ###########
@@ -15,7 +17,7 @@ def send_tx(node, sender_private_key, recipient_public_key, amount):
     return p.prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
 def mine_block(node, miner_public_key, prev_block, mempool, height, nonce=0):
-    coinbase = p.prepare_coinbase(miner_public_key, height)
+    coinbase = p.prepare_coinbase(miner_public_key)
     unmined_block = p.Block(
         txns=[coinbase] + deepcopy(mempool),
         prev_id=prev_block.id,
@@ -36,7 +38,6 @@ def new_node():
     
     bob_balance = node.fetch_balance(ids.bob_public_key)
     alice_balance = node.fetch_balance(ids.alice_public_key)
-    print(bob_balance, alice_balance)
 
     # Bob mines height=2,3,4 including one bob-to-alice txn
     mine_block(node, ids.bob_public_key, node.chain[-1], [], 2)
@@ -248,6 +249,6 @@ def test_unsuccessful_reorg():
                     [alice_to_bob], 2)
 
     # UTXO, chain, branches unchanged
-    assert str(node.utxo_set) == str(initial_utxo_set) # FIXME
+    assert node.utxo_set.keys() == initial_utxo_set.keys()
     assert node.chain == initial_chain
     assert node.branches == initial_branches
