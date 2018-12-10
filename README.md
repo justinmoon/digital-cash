@@ -32,7 +32,7 @@ python3 -m pip install -r requirements.txt
 jupyter notebook
 ```
 
-For Windows, there are 2 options. First, you can install the [Windows Linux Subsystem](https://docs.microsoft.com/en-us/windows/wsl/install-win10) and follow the instructions above. Or you can use open PowerShell and execute the following commands:
+For Windows, there are 2 options. I recommend you install the [Windows Linux Subsystem](https://docs.microsoft.com/en-us/windows/wsl/install-win10) and follow the instructions above. Another option is to open PowerShell and execute the following commands:
 
 ```
 git clone https://github.com/superquest/digital-cash.git
