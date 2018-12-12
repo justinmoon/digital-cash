@@ -2,6 +2,7 @@ from copy import deepcopy
 import pytest
 import mypowp2pcoin as p
 # import powp2pcoin_five as p
+# import powcoin_final as p
 # import powcoin as p
 import identities as ids
 
@@ -10,13 +11,13 @@ import identities as ids
 ###########
 
 # Set difficuly very low
-p.POW_TARGET = 2** (256 - 2)
+p.POW_TARGET = 2 ** (256 - 2)
 
 def send_tx(node, sender_private_key, recipient_public_key, amount):
     utxos = node.fetch_utxos(sender_private_key.get_verifying_key())
     return p.prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
 
-def mine_block(node, miner_public_key, prev_block, mempool, height, nonce=0):
+def mine_block(node, miner_public_key, prev_block, mempool, nonce=0):
     coinbase = p.prepare_coinbase(miner_public_key)
     unmined_block = p.Block(
         txns=[coinbase] + deepcopy(mempool),
@@ -27,43 +28,6 @@ def mine_block(node, miner_public_key, prev_block, mempool, height, nonce=0):
     node.handle_block(mined_block)
     return mined_block
 
-def new_node():
-    node = p.Node(address="")
-
-    # Bob mines height=0
-    p.mine_genesis_block(node, ids.bob_public_key)
-
-    # Alice mines height=1
-    mine_block(node, ids.alice_public_key, node.chain[-1], [], 1)
-    
-    bob_balance = node.fetch_balance(ids.bob_public_key)
-    alice_balance = node.fetch_balance(ids.alice_public_key)
-
-    # Bob mines height=2,3,4 including one bob-to-alice txn
-    mine_block(node, ids.bob_public_key, node.chain[-1], [], 2)
-    bob_to_alice = send_tx(node, ids.bob_private_key, 
-                           ids.alice_public_key, 10)
-    mine_block(node, ids.bob_public_key, node.chain[-1], [bob_to_alice], 3)
-    mine_block(node, ids.bob_public_key, node.chain[-1], [], 4)
-
-    # Alice forks off 2 blocks at height=1 including one alice-to-bob txn
-    mine_block(node, ids.alice_public_key, node.chain[1], [], 2)
-    alice_to_bob = send_tx(node, ids.alice_private_key, 
-                           ids.bob_public_key, 10)
-    mine_block(node, ids.alice_public_key, node.branches[0][-1], 
-               [alice_to_bob], 3)
-
-    return node
-
-
-def make_node():
-    node = p.Node(address="")
-
-    # Bob mines height=0
-    p.mine_genesis_block(node, ids.bob_public_key)
-
-    return node
-
 #########
 # Tests #
 #########
@@ -73,7 +37,7 @@ def test_extend_chain():
 
     # Bob mines height=0,1
     p.mine_genesis_block(node, ids.bob_public_key)
-    block = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
+    block = mine_block(node, ids.bob_public_key, node.chain[0], [])
     
     # Alice's balance unchanged, Bob received block subsidy
     assert node.fetch_balance(ids.alice_public_key) == 0 
@@ -87,15 +51,14 @@ def test_extend_chain():
     assert node.branches == []
 
 def test_fork_chain():
-    node = make_node()
     node = p.Node(address="")
 
     # Bob mines height=0,1
     p.mine_genesis_block(node, ids.bob_public_key)
-    bob_block = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
+    bob_block = mine_block(node, ids.bob_public_key, node.chain[0], [])
 
     # Alice mines height=1 too
-    alice_block = mine_block(node, ids.alice_public_key, node.chain[0], [], 1)
+    alice_block = mine_block(node, ids.alice_public_key, node.chain[0], [])
 
     # UTXO database unchanged
     assert node.fetch_balance(ids.alice_public_key) == 0 
@@ -109,18 +72,18 @@ def test_fork_chain():
     assert len(node.branches) == 1
     assert node.branches[0] == [alice_block]
 
-def test_block_extending_fork():
+def test_forking_chain():
     node = p.Node(address="")
 
     # Bob mines height=0,1,2
     p.mine_genesis_block(node, ids.bob_public_key)
-    mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
-    bob_block = mine_block(node, ids.bob_public_key, node.chain[1], [], 2)
+    mine_block(node, ids.bob_public_key, node.chain[0], [])
+    bob_block = mine_block(node, ids.bob_public_key, node.chain[1], [])
 
     # Alice mines height=1
-    alice_block = mine_block(node, ids.alice_public_key, node.chain[0], [], 1)
+    alice_block = mine_block(node, ids.alice_public_key, node.chain[0], [])
     # Alice mines block on top of her branch
-    alice_block = mine_block(node, ids.alice_public_key, node.branches[0][0], [], 2)
+    alice_block = mine_block(node, ids.alice_public_key, node.branches[0][0], [])
 
     # UTXOs
     assert node.fetch_balance(ids.alice_public_key) == 0 
@@ -131,21 +94,20 @@ def test_block_extending_fork():
     assert len(node.branches) == 1
     assert len(node.branches[0]) == 2
 
-def test_block_forking_fork():
+def test_forking_branch():
     node = p.Node(address="")
 
     # Bob mines height=0,1,2
     p.mine_genesis_block(node, ids.bob_public_key)
-    mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
-    bob_block = mine_block(node, ids.bob_public_key, node.chain[1], [], 2)
+    mine_block(node, ids.bob_public_key, node.chain[0], [])
+    bob_block = mine_block(node, ids.bob_public_key, node.chain[1], [])
 
     # Alice mines height=1
-    first = mine_block(node, ids.alice_public_key, node.chain[0], [], 1)
+    first = mine_block(node, ids.alice_public_key, node.chain[0], [])
 
     # Alice mines 2 separate blocks top of her branch, each at height 2
-    second = mine_block(node, ids.alice_public_key, node.branches[0][0], [], 2)
-    third = mine_block(node, ids.alice_public_key, node.branches[0][0], [], 
-                       2, nonce=second.nonce+1)
+    second = mine_block(node, ids.alice_public_key, node.branches[0][0], [])
+    third = mine_block(node, ids.alice_public_key, node.branches[0][0], [], nonce=second.nonce+1)
      
     # UTXOs and chain unaffected
     assert node.fetch_balance(ids.alice_public_key) == 0 
@@ -163,12 +125,12 @@ def test_successful_reorg():
 
     # Bob mines height=0,1,2
     b0 = p.mine_genesis_block(node, ids.bob_public_key)
-    b1 = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
+    b1 = mine_block(node, ids.bob_public_key, node.chain[0], [])
     # height=2 contains a bob->alice txn
     bob_to_alice = send_tx(node, ids.bob_private_key, 
                            ids.alice_public_key, 10)
     b2 = mine_block(node, ids.bob_public_key, node.chain[1], 
-                    [bob_to_alice], 2)
+                    [bob_to_alice])
 
     # Alice accepts bob's first two blocks, but not the third
     p.mine_genesis_block(alice_node, ids.bob_public_key) # FIXME confusing
@@ -176,7 +138,7 @@ def test_successful_reorg():
 
     # FIXME just borrow everything up until this point from another test
     # Create and handle two blocks atop Alice's chain
-    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [], 1)
+    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [])
     node.handle_block(a2)
 
     # Chains
@@ -195,7 +157,7 @@ def test_successful_reorg():
     alice_to_bob = send_tx(alice_node, ids.alice_private_key, 
                            ids.bob_public_key, 20)
     a3 = mine_block(node, ids.alice_public_key, node.branches[0][0], 
-                    [alice_to_bob], 2)
+                    [alice_to_bob])
 
 
     # Chains
@@ -222,8 +184,8 @@ def test_unsuccessful_reorg():
 
     # Bob mines height=0,1,2
     b0 = p.mine_genesis_block(node, ids.bob_public_key)
-    b1 = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
-    b2 = mine_block(node, ids.bob_public_key, node.chain[1], [], 2)
+    b1 = mine_block(node, ids.bob_public_key, node.chain[0], [])
+    b2 = mine_block(node, ids.bob_public_key, node.chain[1], [])
 
     # Alice accepts bob's first two blocks, but not the third
     p.mine_genesis_block(alice_node, ids.bob_public_key) # FIXME confusing
@@ -231,7 +193,7 @@ def test_unsuccessful_reorg():
 
     # FIXME just borrow everything up until this point from another test
     # Create one valid block for Alice
-    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [], 1)
+    a2 = mine_block(alice_node, ids.alice_public_key, node.chain[1], [])
     node.handle_block(a2)
 
     # Create one invalid block for Alice
@@ -246,7 +208,7 @@ def test_unsuccessful_reorg():
 
     # This block shouldn't make it into branches or chain
     a3 = mine_block(node, ids.alice_public_key, node.branches[0][0], 
-                    [alice_to_bob], 2)
+                    [alice_to_bob])
 
     # UTXO, chain, branches unchanged
     assert node.utxo_set.keys() == initial_utxo_set.keys()

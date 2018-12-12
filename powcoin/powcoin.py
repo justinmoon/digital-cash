@@ -90,9 +90,9 @@ class TxIn:
     def outpoint(self):
         return (self.tx_id, self.index)
 
-    def __repr__(self):
-        signature = self.signature if isinstance(self.signature, int) else "..."
-        return f"TxIn(tx_id={self.tx_id}, index={self.index} {signature})"
+    # def __repr__(self):
+        # signature = self.signature if isinstance(self.signature, int) else "..."
+        # return f"TxIn(tx_id={self.tx_id}, index={self.index} {signature})"
 
 class TxOut:
 
@@ -100,8 +100,8 @@ class TxOut:
         self.amount = amount
         self.public_key = public_key
 
-    def __repr__(self):
-        return f"TxOut(amount={self.amount}, public_key={key_to_name(self.public_key)})"
+    # def __repr__(self):
+        # return f"TxOut(amount={self.amount}, public_key={key_to_name(self.public_key)})"
 
 class UnspentTxOut:
 
@@ -115,8 +115,8 @@ class UnspentTxOut:
     def outpoint(self):
         return (self.tx_id, self.index)
 
-    def __repr__(self):
-        return f"TxOut(tx_id={self.tx_id}, index={self.index} amount={self.amount}, public_key={key_to_name(self.public_key)})"
+    # def __repr__(self):
+        # return f"TxOut(tx_id={self.tx_id}, index={self.index} amount={self.amount}, public_key={key_to_name(self.public_key)})"
 
 
 class Block:
@@ -174,17 +174,16 @@ class Node:
         self.utxo_set = {}
         self.mempool = []
         self.peers = []
+        self.pending_peers = []
         self.address = address
         self.chain = []
         self.branches = []
 
     def connect(self, peer):
         if peer not in self.peers and peer != self.address:
+            logger.info(f'(handshake) Sent "connect" to {peer[0]}')
             send_message(peer, "connect", None)
-
-    def handle_peer(self, peer):
-        if peer not in self.peers and peer != self.address:
-            node.peers.append(peer)
+            self.pending_peers.append(peer)
 
     def initial_block_download(self):
         for peer in self.peers:
@@ -496,20 +495,31 @@ class TCPHandler(socketserver.BaseRequestHandler):
         command = message["command"]
         data = message["data"]
 
+        # Handshake / Authentication
         if command == "connect":
-            node.handle_peer(peer)
-            logger.info(f'Connected to {node.peers}')
-            send_message(peer, "connect-response", None)
+            if peer not in node.pending_peers \
+                    and peer not in node.peers \
+                    and peer != node.address:
+                node.pending_peers.append(peer)
+                logger.info(f'(handshake) Accepted "connect" request from {peer[0]}')
+                send_message(peer, "connect-response", None)
 
-        if command == "connect-response":
-            node.handle_peer(peer)
-            logger.info(f'Connected to {peer[0]}"')
+        elif command == "connect-response":
+            if peer in node.pending_peers \
+                    and peer not in node.peers \
+                    and peer != node.address:
+                node.pending_peers.remove(peer)
+                node.peers.append(peer)
+                logger.info(f'(handshake) Connected to {peer[0]}"')
+                send_message(peer, "connect-response", None)
 
-            # Request their peers
-            send_message(peer, "peers", None)
+                # Request their peers
+                send_message(peer, "peers", None)
 
-        assert peer in node.peers, "Rejecting message from unconnected peer"
+        else:
+            assert peer in node.peers, f"Rejecting {command} message from unconnected peer"
 
+        # Business logic
         if command == "peers":
             send_message(peer, "peers-response", node.peers)
 
@@ -517,7 +527,6 @@ class TCPHandler(socketserver.BaseRequestHandler):
             for peer in data:
                 try:
                     node.connect(peer)
-                    logger.info(f'Connected to "{peer[0]}"')
                 except:
                     logger.info(f'Node "{peer[0]}" offline')
 
@@ -653,7 +662,7 @@ def main(args):
 
         node_id = int(os.environ["ID"])
 
-        duration = 3 * node_id
+        duration = 0 * node_id
         logger.info(f"Sleeping {duration}")
         time.sleep(duration)
         logger.info("Waking up")
@@ -675,7 +684,6 @@ def main(args):
         for peer in peers:
             try:
                 node.connect(peer)
-                logger.info(f'Connected to "{peer[0]}"')
             except:
                 logger.info(f'Node "{peer[0]} offline"')
 

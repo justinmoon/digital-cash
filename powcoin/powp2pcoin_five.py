@@ -27,10 +27,6 @@ lock = threading.Lock()
 logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
 logger = logging.getLogger(__name__)
 
-def print_exc():
-    import traceback
-    logger.info(traceback.format_exc())
-
 
 def spend_message(tx, index):
     outpoint = tx.tx_ins[index].outpoint
@@ -105,17 +101,8 @@ class Block:
     def __eq__(self, other):
         return self.id == other.id
 
-def total_work(chain):
-    return len(chain)
-
-def tx_in_to_tx_out(tx_in, chain):
-    for block in chain:
-        for tx in block.txns:
-            if tx.id == tx_in.tx_id:
-                tx_out = tx.tx_outs[tx_in.index]
-                return TxOut(tx_id=tx_in.tx_id, index=tx_in.index,
-                       amount=tx_out.amount, public_key=tx_out.public_key)
-
+    def __repr__(self):
+        return f"Block(prev_id={self.prev_id[:10]}... id={self.id[:10]}...)"
 
 class Node:
 
@@ -147,12 +134,6 @@ class Node:
         return [tx_out for tx_out in self.utxo_set.values() 
                 if tx_out.public_key == public_key]
 
-    def fetch_balance(self, public_key):
-        # Fetch utxos associated with this public key
-        utxos = self.fetch_utxos(public_key)
-        # Sum the amounts
-        return sum([tx_out.amount for tx_out in utxos])
-
     def connect_tx(self, tx):
         # Remove utxos that were just spent
         if not tx.is_coinbase:
@@ -160,32 +141,18 @@ class Node:
                 del self.utxo_set[tx_in.outpoint]
 
         # Save utxos which were just created
-        for index, tx_out in enumerate(tx.tx_outs):
-            utxo = TxOut(tx_id=tx.id, index=index, 
-                amount=tx_out.amount, public_key=tx_out.public_key)
-            self.utxo_set[utxo.outpoint] = utxo
+        for tx_out in tx.tx_outs:
+            self.utxo_set[tx_out.outpoint] = tx_out
 
-        # Remove from mempool
+        # Clean up mempool
         if tx in self.mempool:
             self.mempool.remove(tx)
-            logging.info(f"Removed tx from mempool")
 
-    def disconnect_tx(self, tx):
-        # tx.tx_ins put back in self.utxo_set
-        if not tx.is_coinbase:
-            for tx_in in tx.tx_ins:
-                tx_out = tx_in_to_tx_out(tx_in, self.chain)
-                self.utxo_set[tx_out.outpoint] = tx_out
-
-        # tx.tx_outs removed from utxo_set
-        for index in range(len(tx.tx_outs)):
-            outpoint = (tx.id, index)
-            del self.utxo_set[outpoint]
-
-        # Put it back in mempool
-        if tx not in self.mempool and not tx.is_coinbase:
-            self.mempool.append(tx)
-            logging.info(f"Added tx to mempool")
+    def fetch_balance(self, public_key):
+        # Fetch utxos associated with this public key
+        utxos = self.fetch_utxos(public_key)
+        # Sum the amounts
+        return sum([tx_out.amount for tx_out in utxos])
 
     def validate_tx(self, tx):
         in_sum = 0
@@ -225,101 +192,49 @@ class Node:
             for peer in self.peers:
                 send_message(peer, "tx", tx)
 
-    def locate_in_branch(self, block_id):
-        for branch_index, branch in enumerate(self.branches):
-            for height, block in enumerate(branch):
-                if block.id == block_id:
-                    return branch, branch_index, height
-        return None, None, None
-
     def validate_block(self, block, validate_txns=False):
-        # Check POW
         assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
 
-        # Check txns if we're extending main chain
         if validate_txns:
+
+            # Validate coinbase separately
             self.validate_coinbase(block.txns[0])
+
+            # Check the transactions are valid
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
 
     def handle_block(self, block):
         # Ignore if we've already seen it
-        in_branch = self.locate_in_branch(block.id)[0]
         in_chain = block in self.chain
-        if in_branch or in_chain:
+        # TODO in_branch
+        if in_chain:
             raise Exception("Duplicate")
 
-        branch, branch_index, height = self.locate_in_branch(block.prev_id)
-
-        # Conditions used in if-statements below
+        # Define conditions for if-statements below
         extends_chain = block.prev_id == self.chain[-1].id
-        forks_chain = not branch and block.prev_id in \
-                [block.id for block in self.chain]
-        extends_branch = branch and height == len(branch) -1
-        forks_branch = branch and height != len(branch) -1
+        forks_chain = block.prev_id in [block.id for block in self.chain] 
 
-        # First of all, validate the block
+        # Validate the block
         self.validate_block(block, validate_txns=extends_chain)
 
+        # Handle cases separately
         if extends_chain:
-            # Add it to the chain
             self.connect_block(block)
-            logger.info(f"Extended chain to height {len(self.chain)}")
+            logger.info(f"Extended chain to height {len(self.chain)-1}")
         elif forks_chain:
-            # Create a new branch with just this block
             self.branches.append([block])
-            logger.info(f"Created branch {len(self.branches)} to height {len(self.branches[-1])}")
-        elif extends_branch:
-            # Add it to the branch
-            branch.append(block)
-            logger.info(f"Extended branch {branch_index} to {len(branch)}")
+            logger.info(f"Created branch {len(self.branches)-1}")
 
-            # Reorg if branch now has more work than main chain
-            fork_block_id = branch[0].prev_id
-            fork_index = [block.id for block in self.chain].index(fork_block_id)
-            chain_since_fork = self.chain[fork_index+1:]
-            if total_work(branch) > total_work(chain_since_fork):
-                logger.info(f"Reorging to branch {branch_index}")
-                self.reorg(branch, branch_index, height)
-        elif forks_branch:
-            # Create a new branch with branch up to fork + this block
-            self.branches.append(branch[:height+1] + [block])
-            logger.info(f"Created (fork) branch {len(self.branches)} to height {len(self.branches[-1])}")
-        else:
-            # Re-enter IBD to find parent blocks
-            self.sync()
-            raise Exception("Unknown parent")
-
-        # If there were no problems, tell peers
+        # Block propogation
         for peer in self.peers:
-            disrupt(send_message, [peer, "blocks", [block]])
-
-    def reorg(self, branch, branch_index, fork_index):
-        # Disconnect to fork block, preserving as a branch
-        disconnected_blocks = []
-        while self.chain[-1].id != branch[0].prev_id:
-            block = self.chain.pop()
-            for tx in block.txns:
-                self.disconnect_tx(tx)
-            disconnected_blocks.insert(0, block)
-
-        # Replace branch with newly disconnected blocks
-        self.branches[branch_index] = disconnected_blocks
-
-        # Connect new blocks, rollback if error encountered
-        for block in branch:
-            try:
-                self.validate_block(block, validate_txns=True)
-                self.connect_block(block)
-            except:
-                self.reorg(disconnected_blocks, branch_index, fork_index)
-                logger.info(f"Reorg failed")
-                return
+            disrupt(func=send_message, args=[peer, "blocks", [block]])
 
     def connect_block(self, block):
-        # Add to main chain
+        # Add the block to our chain
         self.chain.append(block)
-        # Update utxo set
+
+        # If they're all good, update self.chain and self.utxo_set
         for tx in block.txns:
             self.connect_tx(tx)
 
@@ -410,7 +325,6 @@ def mine_genesis_block(node, public_key):
     mined_block = mine_block(unmined_block)
     node.chain.append(mined_block)
     node.connect_tx(coinbase)
-    return mined_block
 
 ##############
 # Networking #
@@ -444,17 +358,8 @@ def prepare_message(command, data):
     length = len(serialized_message).to_bytes(4, 'big')
     return length + serialized_message
 
-def send_message(address, command, data, response=False):
-    message = prepare_message(command, data)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect(address)
-        s.sendall(message)
-        if response:
-            return read_message(s)
-
 def disrupt(func, args):
-    # Adds latency. Drops packets.
-    if random.randint(1, 10) != 5:
+    if random.randint(0, 10) != 0:
         threading.Timer(random.random(), func, args).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):
@@ -532,8 +437,8 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     with lock:
                         node.handle_block(block)
                     mining_interrupt.set()
-                except Exception as e:
-                    logger.info(f"Rejected block: {e}")
+                except:
+                    logger.info("Rejected block")
 
             if len(data) == GET_BLOCKS_CHUNK:
                 node.sync()
@@ -558,6 +463,14 @@ def serve():
     logger.info("Starting server")
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
+
+def send_message(address, command, data, response=False):
+    message = prepare_message(command, data)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect(address)
+        s.sendall(message)
+        if response:
+            return read_message(s)
 
 
 #######
@@ -585,7 +498,7 @@ def main(args):
         node = Node(address=(name, PORT))
 
         # Alice is Satoshi!
-        mine_genesis_block(lookup_public_key("alice"))
+        mine_genesis_block(node, lookup_public_key("alice"))
 
         # Start server thread
         server_thread = threading.Thread(target=serve, name="server")

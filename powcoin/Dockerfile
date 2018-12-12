@@ -3,6 +3,6 @@ ADD requirements.txt ./
 RUN pip install -r requirements.txt
 ADD utils.py ./
 ADD identities.py ./
-ADD powp2pcoin.py ./
+ADD mypowp2pcoin.py ./
 
-CMD ["python", "powp2pcoin.py", "serve"]
+CMD ["python", "-u", "mypowp2pcoin.py", "serve"]
