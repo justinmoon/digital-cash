@@ -83,6 +83,8 @@ class Bank:
 
         for tx_out in tx.tx_outs:
             out_sum += tx_out.amount
+            
+        assert out_sum == in_sum, 'In and Out amounts aren\'t equal'
 
     def handle_tx(self, tx):
         # Save to self.utxo if it's valid
