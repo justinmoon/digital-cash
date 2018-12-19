@@ -1,7 +1,7 @@
 """
 POWCoin Part 4
 * Node.handle_block supports creation and extension of branches, but doesn't yet do reorgs
-* Define Node.locate_in_branch()
+* Define Node.find_in_branch()
 * Define Block.__eq__
 * Fix how Tx.__repr__ handles genesis block
 
@@ -210,7 +210,7 @@ class Node:
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
 
-    def locate_in_branch(self, block_id):
+    def find_in_branch(self, block_id):
         for branch_index, branch in enumerate(self.branches):
             for height, block in enumerate(branch):
                 if block.id == block_id:
@@ -219,7 +219,7 @@ class Node:
 
     def handle_block(self, block):
         # Look up previous block
-        branch, branch_index, height = self.locate_in_branch(block.prev_id)
+        branch, branch_index, height = self.find_in_branch(block.prev_id)
 
         # Conditions
         extends_chain = block.prev_id == self.blocks[-1].id

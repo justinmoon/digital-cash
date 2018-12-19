@@ -1,6 +1,6 @@
 from copy import deepcopy
 import pytest
-import powcoin as p
+import powcoin_final as p
 import identities as ids
 
 ###########
@@ -66,6 +66,29 @@ def make_node():
 #########
 # Tests #
 #########
+
+def test_duplicate():
+    node = p.Node(address="")
+    alice_node = p.Node(address="")
+
+    # Bob mines height=0,1
+    p.mine_genesis_block(node, ids.bob_public_key)
+    p.mine_genesis_block(alice_node, ids.bob_public_key)
+
+    block = mine_block(node, ids.bob_public_key, node.chain[0], [], 1)
+
+    # Assert handling block already in blocks
+    with pytest.raises(Exception):
+        node.handle_block(block)
+
+    assert alice_node.chain[0] == node.chain[0]
+    block = mine_block(alice_node, ids.alice_public_key, node.chain[0], [], 1)
+    node.handle_block(block)  # goes into branches
+    assert len(node.branches) == 1
+
+    # Assert handling block already in branches
+    with pytest.raises(Exception):
+        node.handle_block(block)
 
 def test_extend_chain():
     node = p.Node(address="")
@@ -180,6 +203,7 @@ def test_successful_reorg():
 
     # Chains
     assert len(node.chain) == 3
+    print([b0, b1, b2])
     assert node.chain == [b0, b1, b2]
     assert len(node.branches) == 1
     assert node.branches[0] == [a2]
@@ -216,6 +240,8 @@ def test_successful_reorg():
     assert bob_to_alice in node.mempool
 
 def test_unsuccessful_reorg():
+    # FIXME: ideally this would assert that a reorg was attempted ...
+    # passes even when reorgs were never tried ...
     node = p.Node(address="")
     alice_node = p.Node(address="")
 
@@ -244,10 +270,14 @@ def test_unsuccessful_reorg():
     initial_branches = deepcopy(node.branches)
 
     # This block shouldn't make it into branches or chain
+    # b/c it contains an invalid transaction that will only be discovered
+    # during reorg
     a3 = mine_block(node, ids.alice_public_key, node.branches[0][0], 
                     [alice_to_bob], 2)
 
     # UTXO, chain, branches unchanged
-    assert str(node.utxo_set) == str(initial_utxo_set) # FIXME
+    assert str(node.utxo_set.keys()) == str(initial_utxo_set.keys()) # FIXME
+    print(initial_branches)
+    print(node.branches)
     assert node.chain == initial_chain
     assert node.branches == initial_branches
