@@ -1,15 +1,15 @@
 """
-POWCoin Part 3
-* Node.handle_block only validates transactions if adding to main chain
-* Break out code adding block to main chain into Node.connect_block method
-* Rename Node.update_utxo_set to Node.connect_tx
-* Handle fork blocks separately, adding to Node.branches
+POWCoin Part 4
+* Node.handle_block supports creation and extension of branches, but doesn't yet do reorgs
+* Define Node.locate_in_branch()
+* Define Block.__eq__
+* Fix how Tx.__repr__ handles genesis block
 
 Usage:
-  powcoin_three.py serve
-  powcoin_three.py ping [--node <node>]
-  powcoin_three.py tx <from> <to> <amount> [--node <node>]
-  powcoin_three.py balance <name> [--node <node>]
+  powcoin_four.py serve
+  powcoin_four.py ping [--node <node>]
+  powcoin_four.py tx <from> <to> <amount> [--node <node>]
+  powcoin_four.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
@@ -102,8 +102,13 @@ class Block:
     def proof(self):
         return int(self.id, 16)
 
+    def __eq__(self, other):
+        # FIXME WTF it feels like I've defined this 50 times ...
+        return self.id == other.id
+
     def __repr__(self):
-        return f"Block(prev_id={self.prev_id[:10]}... id={self.id[:10]}...)"
+        prev_id = self.prev_id[:10] if self.prev_id else None
+        return f"Block(prev_id={prev_id}... id={self.id[:10]}...)"
 
 class Node:
 
@@ -205,10 +210,24 @@ class Node:
             for tx in block.txns[1:]:
                 self.validate_tx(tx)
 
+    def locate_in_branch(self, block_id):
+        for branch_index, branch in enumerate(self.branches):
+            for height, block in enumerate(branch):
+                if block.id == block_id:
+                    return branch, branch_index, height
+        return None, None, None
+
     def handle_block(self, block):
+        # Look up previous block
+        branch, branch_index, height = self.locate_in_branch(block.prev_id)
+
         # Conditions
         extends_chain = block.prev_id == self.blocks[-1].id
-        forks_chain = block.prev_id in [block.id for block in self.blocks] 
+        forks_chain = not extends_chain and \
+                      not branch and \
+                      block.prev_id in [block.id for block in self.blocks] 
+        extends_branch = branch and height == len(branch) - 1
+        forks_branch = branch and height != len(branch) - 1
 
         # Always validate, but only validate transactions if extending chain
         self.validate_block(block, validate_txns=extends_chain)
@@ -220,6 +239,13 @@ class Node:
         elif forks_chain:
             self.branches.append([block])
             logger.info(f"Created branch {len(self.branches)-1}")
+        elif extends_branch:
+            branch.append(block)
+            # FIXME: reorg if this branch has more work than our main chain
+            logger.info(f"Extended branch {branch_index} to {len(branch)}")
+        elif forks_branch:
+            self.branches.append(branch[:height+1] + [block])
+            logger.info(f"Created branch {len(self.branches)-1} to height {len(self.branches[-1]) - 1}")
         else:
             raise Exception("Couldn't handle block")
 

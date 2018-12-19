@@ -306,6 +306,7 @@ def mine_genesis_block(node, public_key):
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.update_utxo_set(coinbase)
+    return mined_block
 
 ##############
 # Networking #
