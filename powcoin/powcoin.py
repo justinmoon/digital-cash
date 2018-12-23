@@ -32,16 +32,14 @@ def spend_message(tx, index):
     outpoint = tx.tx_ins[index].outpoint
     return serialize(outpoint) + serialize(tx.tx_outs)
 
-def total_work(chain):
-    return len(chain)
+def total_work(blocks):
+    return len(blocks)
 
-def tx_in_to_tx_out(tx_in, chain):
-    for block in chain:
+def tx_in_to_tx_out(tx_in, blocks):
+    for block in blocks:
         for tx in block.txns:
             if tx.id == tx_in.tx_id:
                 return tx.tx_outs[tx_in.index]
-                # return TxOut(tx_id=tx_in.tx_id, index=tx_in.index,
-                       # amount=tx_out.amount, public_key=tx_out.public_key)
 
 class Tx:
 
@@ -110,7 +108,6 @@ class Block:
         return int(self.id, 16)
 
     def __eq__(self, other):
-        # FIXME WTF it feels like I've defined this 50 times ...
         return self.id == other.id
 
     def __repr__(self):
@@ -245,7 +242,7 @@ class Node:
         found_in_chain = block in self.blocks
         found_in_branch = self.find_in_branch(block.id)[0] is not None
         if found_in_chain or found_in_branch:
-            raise Exception("Duplicate")
+            raise Exception("Received duplicate block")
 
         # Look up previous block
         branch, branch_index, height = self.find_in_branch(block.prev_id)
@@ -266,14 +263,14 @@ class Node:
             logger.info(f"Extended chain to height {len(self.blocks)-1}")
         elif forks_chain:
             self.branches.append([block])
-            logger.info(f"Created branch {len(self.branches)-1}")
+            logger.info(f"Created branch {len(self.branches)}")
         elif extends_branch:
             branch.append(block)
             logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
             # Reorg if branch now has more work than main chain
 
-            chain_ids = [b.id for b in self.blocks]
+            chain_ids = [block.id for block in self.blocks]
             fork_height = chain_ids.index(branch[0].prev_id)
             chain_since_fork = self.blocks[fork_height+1:]
             if total_work(branch) > total_work(chain_since_fork):
