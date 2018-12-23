@@ -1,6 +1,6 @@
 from copy import deepcopy
 import pytest
-import powcoin_six as p
+import mypowcoin as p
 import identities as ids
 
 ###########
@@ -8,7 +8,7 @@ import identities as ids
 ###########
 
 # Set difficuly very low
-p.POW_TARGET = 2** (256 - 2)
+p.POW_TARGET = 2 ** (256 - 2)
 
 def send_tx(node, sender_private_key, recipient_public_key, amount):
     utxos = node.fetch_utxos(sender_private_key.get_verifying_key())
@@ -24,44 +24,6 @@ def mine_block(node, miner_public_key, prev_block, mempool, nonce=0):
     mined_block = p.mine_block(unmined_block)
     node.handle_block(mined_block)
     return mined_block
-
-def new_node():
-    node = p.Node(address="")
-
-    # Bob mines height=0
-    p.mine_genesis_block(node, ids.bob_public_key)
-
-    # Alice mines height=1
-    mine_block(node, ids.alice_public_key, node.blocks[-1], [])
-    
-    bob_balance = node.fetch_balance(ids.bob_public_key)
-    alice_balance = node.fetch_balance(ids.alice_public_key)
-    print(bob_balance, alice_balance)
-
-    # Bob mines height=2,3,4 including one bob-to-alice txn
-    mine_block(node, ids.bob_public_key, node.blocks[-1], [])
-    bob_to_alice = send_tx(node, ids.bob_private_key, 
-                           ids.alice_public_key)
-    mine_block(node, ids.bob_public_key, node.blocks[-1], [bob_to_alice])
-    mine_block(node, ids.bob_public_key, node.blocks[-1], [])
-
-    # Alice forks off 2 blocks at height=1 including one alice-to-bob txn
-    mine_block(node, ids.alice_public_key, node.blocks[1], [])
-    alice_to_bob = send_tx(node, ids.alice_private_key, 
-                           ids.bob_public_key)
-    mine_block(node, ids.alice_public_key, node.branches[0][-1], 
-               [alice_to_bob])
-
-    return node
-
-
-def make_node():
-    node = p.Node(address="")
-
-    # Bob mines height=0
-    p.mine_genesis_block(node, ids.bob_public_key)
-
-    return node
 
 #########
 # Tests #
@@ -109,7 +71,6 @@ def test_extend_chain():
     assert node.branches == []
 
 def test_fork_chain():
-    node = make_node()
     node = p.Node(address="")
 
     # Bob mines height=0,1
@@ -277,7 +238,5 @@ def test_unsuccessful_reorg():
 
     # UTXO, chain, branches unchanged
     assert str(node.utxo_set.keys()) == str(initial_utxo_set.keys()) # FIXME
-    print(initial_branches)
-    print(node.branches)
     assert node.blocks == initial_chain
     assert node.branches == initial_branches
