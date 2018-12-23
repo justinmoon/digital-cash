@@ -1,11 +1,11 @@
 """
-POWCoin Part 6
+POWCoin
 
 Usage:
-  powcoin_six.py serve
-  powcoin_six.py ping [--node <node>]
-  powcoin_six.py tx <from> <to> <amount> [--node <node>]
-  powcoin_six.py balance <name> [--node <node>]
+  powcoin.py serve
+  powcoin.py ping [--node <node>]
+  powcoin.py tx <from> <to> <amount> [--node <node>]
+  powcoin.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
@@ -39,9 +39,9 @@ def tx_in_to_tx_out(tx_in, chain):
     for block in chain:
         for tx in block.txns:
             if tx.id == tx_in.tx_id:
-                tx_out = tx.tx_outs[tx_in.index]
-                return TxOut(tx_id=tx_in.tx_id, index=tx_in.index,
-                       amount=tx_out.amount, public_key=tx_out.public_key)
+                return tx.tx_outs[tx_in.index]
+                # return TxOut(tx_id=tx_in.tx_id, index=tx_in.index,
+                       # amount=tx_out.amount, public_key=tx_out.public_key)
 
 class Tx:
 
@@ -169,9 +169,8 @@ class Node:
                 self.utxo_set[tx_out.outpoint] = tx_out
 
         # Remove UTXOs created by this transaction
-        for index in range(len(tx.tx_outs)):
-            outpoint = (tx.id, index)
-            del self.utxo_set[outpoint]
+        for tx_out in tx.tx_outs:
+            del self.utxo_set[tx_out.outpoint]
 
         # Put it back in mempool
         if tx not in self.mempool and not tx.is_coinbase:
@@ -254,7 +253,6 @@ class Node:
         # Conditions
         extends_chain = block.prev_id == self.blocks[-1].id
         forks_chain = not extends_chain and \
-                      not branch and \
                       block.prev_id in [block.id for block in self.blocks] 
         extends_branch = branch and height == len(branch) - 1
         forks_branch = branch and height != len(branch) - 1
@@ -276,10 +274,11 @@ class Node:
             # Reorg if branch now has more work than main chain
 
             chain_ids = [b.id for b in self.blocks]
-            chain_since_fork = self.blocks[chain_ids.index(branch[0].prev_id)+1:]
+            fork_height = chain_ids.index(branch[0].prev_id)
+            chain_since_fork = self.blocks[fork_height+1:]
             if total_work(branch) > total_work(chain_since_fork):
                 logger.info(f"Reorging to branch {branch_index}")
-                self.reorg(branch, branch_index, height)
+                self.reorg(branch, branch_index)
         elif forks_branch:
             self.branches.append(branch[:height+1] + [block])
             logger.info(f"Created branch {len(self.branches)-1} to height {len(self.branches[-1]) - 1}")
@@ -291,7 +290,7 @@ class Node:
         for peer in self.peers:
             disrupt(func=send_message, args=[peer, "blocks", [block]])
 
-    def reorg(self, branch, branch_index, fork_index):
+    def reorg(self, branch, branch_index):
         # Disconnect to fork block, preserving as a branch
         disconnected_blocks = []
         while self.blocks[-1].id != branch[0].prev_id:
@@ -303,13 +302,13 @@ class Node:
         # Replace branch with newly disconnected blocks
         self.branches[branch_index] = disconnected_blocks
 
-        # Connect new blocks, rollback if error encountered
+        # Connect branch, rollback if error encountered
         for block in branch:
             try:
                 self.validate_block(block, validate_txns=True)
                 self.connect_block(block)
             except:
-                self.reorg(disconnected_blocks, branch_index, fork_index)
+                self.reorg(disconnected_blocks, branch_index)
                 logger.info(f"Reorg failed")
                 return
 
@@ -443,7 +442,9 @@ def prepare_message(command, data):
     return length + serialized_message
 
 def disrupt(func, args):
+    # Simulate packet loss
     if random.randint(0, 10) != 0:
+        # Simulate network latency
         threading.Timer(random.random(), func, args).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):

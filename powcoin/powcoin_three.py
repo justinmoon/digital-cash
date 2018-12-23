@@ -208,7 +208,8 @@ class Node:
     def handle_block(self, block):
         # Conditions
         extends_chain = block.prev_id == self.blocks[-1].id
-        forks_chain = block.prev_id in [block.id for block in self.blocks] 
+        forks_chain = not extends chain and \
+                block.prev_id in [block.id for block in self.blocks] 
 
         # Always validate, but only validate transactions if extending chain
         self.validate_block(block, validate_txns=extends_chain)
@@ -221,7 +222,7 @@ class Node:
             self.branches.append([block])
             logger.info(f"Created branch {len(self.branches)-1}")
         else:
-            raise Exception("Couldn't handle block")
+            raise Exception("Couldn't locate parent block")
 
         # Block propogation
         for peer in self.peers:
@@ -357,7 +358,9 @@ def prepare_message(command, data):
     return length + serialized_message
 
 def disrupt(func, args):
+    # Simulate packet loss
     if random.randint(0, 10) != 0:
+        # Simulate network latency
         threading.Timer(random.random(), func, args).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):

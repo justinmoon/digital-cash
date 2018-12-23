@@ -247,7 +247,7 @@ class Node:
             self.branches.append(branch[:height+1] + [block])
             logger.info(f"Created branch {len(self.branches)-1} to height {len(self.branches[-1]) - 1}")
         else:
-            raise Exception("Couldn't handle block")
+            raise Exception("Couldn't locate parent block")
 
         # Block propogation
         for peer in self.peers:
@@ -383,7 +383,9 @@ def prepare_message(command, data):
     return length + serialized_message
 
 def disrupt(func, args):
+    # Simulate packet loss
     if random.randint(0, 10) != 0:
+        # Simulate network latency
         threading.Timer(random.random(), func, args).start()
 
 class TCPHandler(socketserver.BaseRequestHandler):

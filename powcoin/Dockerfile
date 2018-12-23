@@ -3,6 +3,6 @@ ADD requirements.txt ./
 RUN pip install -r requirements.txt
 ADD utils.py ./
 ADD identities.py ./
-ADD powcoin_four.py ./
+ADD mypowcoin.py ./
 
-CMD ["python", "-u", "powcoin_four.py", "serve"]
+CMD ["python", "-u", "mypowcoin.py", "serve"]
