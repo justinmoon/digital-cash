@@ -90,10 +90,12 @@ class TxOut:
 
 class Block:
 
-    def __init__(self, txns, prev_id, nonce):
+    def __init__(self, txns, prev_id, nonce, bits, timestamp):
         self.txns = txns
         self.prev_id = prev_id
         self.nonce = nonce
+        self.bits = bits
+        self.timestamp = timestamp
 
     @property
     def header(self):
@@ -106,6 +108,10 @@ class Block:
     @property
     def proof(self):
         return int(self.id, 16)
+
+    @property
+    def target(self):
+        return 2 ** (256 - self.bits)
 
     def __eq__(self, other):
         return self.id == other.id
@@ -207,7 +213,8 @@ class Node:
 
     def validate_coinbase(self, tx):
         assert len(tx.tx_ins) == len(tx.tx_outs) == 1
-        assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
+        # FIXME
+        # assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
 
     def handle_tx(self, tx):
         if tx not in self.mempool:
@@ -219,7 +226,7 @@ class Node:
                 send_message(peer, "tx", tx)
 
     def validate_block(self, block, validate_txns=False):
-        assert block.proof < POW_TARGET, "Insufficient Proof-of-Work"
+        assert block.proof < block.target, "Insufficient Proof-of-Work"
 
         if validate_txns:
 
@@ -317,6 +324,48 @@ class Node:
         for tx in block.txns:
             self.connect_tx(tx)
 
+    def get_next_bits(self, prev_block_id):
+        # check main chain
+        chain_ids = [block.id for block in self.blocks]
+        if prev_block_id in chain_ids:
+            prev_height = chain_ids.index(prev_block_id)
+            prev_block = self.blocks[prev_height]
+        else:
+            # check branches
+            branch, branch_index, prev_height = self.find_in_branch(prev_block_id)
+            prev_block = branch[branch_index]
+
+        assert prev_block is not None and prev_height is not None
+
+
+        index = prev_height - (DIFFICULTY_PERIOD_IN_BLOCKS - 1)
+        if index < 0:
+            return prev_block.bits
+
+        period_start_block = self.blocks[index]
+        actual_time_taken = prev_block.timestamp - period_start_block.timestamp
+        logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS_TARGET} actual: {actual_time_taken}")
+
+        # Only adjust every 5th block
+        if prev_height % DIFFICULTY_PERIOD_IN_BLOCKS != 0:
+            return prev_block.bits
+
+        if actual_time_taken < DIFFICULTY_PERIOD_IN_SECS_TARGET:
+            return prev_block.bits + 1
+        elif actual_time_taken > DIFFICULTY_PERIOD_IN_SECS_TARGET:
+            return prev_block.bits - 1
+        else:
+            return prev_block.bits
+
+
+    def get_block_subsidy(self):
+        halvings = len(self.blocks) // HALVE_SUBSIDY_AFTER_BLOCKS_NUM
+
+        if halvings >= 64:
+            return 0
+
+        return 50 * SATOSHIS_PER_COIN // (2 ** halvings)
+
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
 
@@ -350,13 +399,15 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 def prepare_coinbase(public_key, tx_id=None):
     if tx_id is None:
         tx_id = uuid.uuid4()
+    # FIXME kinda shitty to implicitly use global node here ...
+    # FIXME especially testing wise ...
     return Tx(
         id=tx_id,
         tx_ins=[
             TxIn(None, None, None),    
         ],
         tx_outs=[
-            TxOut(tx_id=tx_id, index=0, amount=BLOCK_SUBSIDY,
+            TxOut(tx_id=tx_id, index=0, amount=node.get_block_subsidy(),
                   public_key=public_key),
         ],
     )
@@ -365,13 +416,22 @@ def prepare_coinbase(public_key, tx_id=None):
 # Mining #
 ##########
 
-DIFFICULTY_BITS = 15
-POW_TARGET = 2 ** (256 - DIFFICULTY_BITS)
+INITIAL_DIFFICULTY_BITS = 15
 mining_interrupt = threading.Event()
 
 
+# TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 1 * 60
+# DIFFICULTY_PERIOD_IN_SECS_TARGET = 60 * 60 * 10
+TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 5
+DIFFICULTY_PERIOD_IN_SECS_TARGET = 30
+DIFFICULTY_PERIOD_IN_BLOCKS = \
+    int(DIFFICULTY_PERIOD_IN_SECS_TARGET / TIME_BETWEEN_BLOCKS_IN_SECS_TARGET)
+HALVE_SUBSIDY_AFTER_BLOCKS_NUM = 210_000  # FIXME
+SATOSHIS_PER_COIN = 100_000_000
+
+
 def mine_block(block):
-    while block.proof >= POW_TARGET:
+    while block.proof >= block.target:
         # TODO: accept interrupts here if tip changes
         if mining_interrupt.is_set():
             logger.info("Mining interrupted")
@@ -384,11 +444,15 @@ def mine_block(block):
 def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
+        bits = node.get_next_bits(node.blocks[-1].id)
+        logger.info(f"BITS = {bits}")
         coinbase = prepare_coinbase(public_key)
         unmined_block = Block(
             txns=[coinbase] + node.mempool,
             prev_id=node.blocks[-1].id,
             nonce=random.randint(0, 1000000000),
+            bits=bits,
+            timestamp=time.time(),
         )
         mined_block = mine_block(unmined_block)
 
@@ -400,10 +464,13 @@ def mine_forever(public_key):
 
 def mine_genesis_block(node, public_key):
     coinbase = prepare_coinbase(public_key, tx_id="abc123")
-    unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0)
+    # FIXME: now it seems the genesis block must hard-coded
+    unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0,
+            bits=INITIAL_DIFFICULTY_BITS, timestamp=1545883906)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.connect_tx(coinbase)
+    logger.info(f"Genesis ID: {mined_block.id}")
     return mined_block
 
 ##############
