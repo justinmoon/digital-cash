@@ -24,6 +24,23 @@ BLOCK_SUBSIDY = 50
 node = None
 lock = threading.Lock()
 
+INITIAL_DIFFICULTY_BITS = 15
+mining_interrupt = threading.Event()
+
+
+# TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 1 * 60
+# DIFFICULTY_PERIOD_IN_SECS_TARGET = 60 * 60 * 10
+# MAX_FUTURE_BLOCK_TIME = (60 * 60 * 2)
+
+TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 5
+DIFFICULTY_PERIOD_IN_SECS_TARGET = 30
+MAX_FUTURE_BLOCK_TIME = (60 * 60 * 2)  # FIXME
+
+DIFFICULTY_PERIOD_IN_BLOCKS = \
+    int(DIFFICULTY_PERIOD_IN_SECS_TARGET / TIME_BETWEEN_BLOCKS_IN_SECS_TARGET)
+HALVE_SUBSIDY_AFTER_BLOCKS_NUM = 210_000  # FIXME
+SATOSHIS_PER_COIN = 100_000_000
+
 logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -213,8 +230,7 @@ class Node:
 
     def validate_coinbase(self, tx):
         assert len(tx.tx_ins) == len(tx.tx_outs) == 1
-        # FIXME
-        # assert tx.tx_outs[0].amount == BLOCK_SUBSIDY
+        assert tx.tx_outs[0].amount == self.get_block_subsidy()
 
     def handle_tx(self, tx):
         if tx not in self.mempool:
@@ -227,6 +243,7 @@ class Node:
 
     def validate_block(self, block, validate_txns=False):
         assert block.proof < block.target, "Insufficient Proof-of-Work"
+        assert abs(block.timestmap - time.time()) < MAX_FUTURE_BLOCK_TIME, "Block has invalid timestamp"
 
         if validate_txns:
 
@@ -350,6 +367,7 @@ class Node:
         if prev_height % DIFFICULTY_PERIOD_IN_BLOCKS != 0:
             return prev_block.bits
 
+        # Adjust bits
         if actual_time_taken < DIFFICULTY_PERIOD_IN_SECS_TARGET:
             return prev_block.bits + 1
         elif actual_time_taken > DIFFICULTY_PERIOD_IN_SECS_TARGET:
@@ -401,6 +419,7 @@ def prepare_coinbase(public_key, tx_id=None):
         tx_id = uuid.uuid4()
     # FIXME kinda shitty to implicitly use global node here ...
     # FIXME especially testing wise ...
+    # Should we pass subsidy in?
     return Tx(
         id=tx_id,
         tx_ins=[
@@ -416,18 +435,7 @@ def prepare_coinbase(public_key, tx_id=None):
 # Mining #
 ##########
 
-INITIAL_DIFFICULTY_BITS = 15
-mining_interrupt = threading.Event()
 
-
-# TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 1 * 60
-# DIFFICULTY_PERIOD_IN_SECS_TARGET = 60 * 60 * 10
-TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 5
-DIFFICULTY_PERIOD_IN_SECS_TARGET = 30
-DIFFICULTY_PERIOD_IN_BLOCKS = \
-    int(DIFFICULTY_PERIOD_IN_SECS_TARGET / TIME_BETWEEN_BLOCKS_IN_SECS_TARGET)
-HALVE_SUBSIDY_AFTER_BLOCKS_NUM = 210_000  # FIXME
-SATOSHIS_PER_COIN = 100_000_000
 
 
 def mine_block(block):
