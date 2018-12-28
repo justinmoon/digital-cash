@@ -1,11 +1,13 @@
 """
-POWCoin
+Bitcoin Part 1
+* Logarithmically decaying block subsidy
+* Introduce base Satoshi unit
 
 Usage:
-  powcoin.py serve
-  powcoin.py ping [--node <node>]
-  powcoin.py tx <from> <to> <amount> [--node <node>]
-  powcoin.py balance <name> [--node <node>]
+  bitcoin.py serve
+  bitcoin.py ping [--node <node>]
+  bitcoin.py tx <from> <to> <amount> [--node <node>]
+  bitcoin.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
