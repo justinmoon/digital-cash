@@ -355,11 +355,11 @@ class Node:
         assert prev_block is not None and prev_height is not None
 
 
-        index = prev_height - (DIFFICULTY_PERIOD_IN_BLOCKS - 1)
-        if index < 0:
+        period_start_index = prev_height - (DIFFICULTY_PERIOD_IN_BLOCKS - 1)
+        if period_start_index < 0:
             return prev_block.bits
 
-        period_start_block = self.blocks[index]
+        period_start_block = self.blocks[period_start_index]
         actual_time_taken = prev_block.timestamp - period_start_block.timestamp
         logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS_TARGET} actual: {actual_time_taken}")
 
