@@ -226,11 +226,14 @@ class Node:
             out_sum += tx_out.amount
 
         # Check no value created or destroyed
-        assert in_sum == out_sum
+        assert in_sum >= out_sum
 
-    def validate_coinbase(self, tx):
+    def validate_coinbase(self, block):
+        tx = block.txns[0]  # FIXME
         assert len(tx.tx_ins) == len(tx.tx_outs) == 1
-        assert tx.tx_outs[0].amount == self.get_block_subsidy()
+
+        fees = self.calculate_fee(block.txns[1:])
+        assert tx.tx_outs[0].amount == self.get_block_subsidy() + fees
 
     def handle_tx(self, tx):
         if tx not in self.mempool:
@@ -243,12 +246,12 @@ class Node:
 
     def validate_block(self, block, validate_txns=False):
         assert block.proof < block.target, "Insufficient Proof-of-Work"
-        assert abs(block.timestmap - time.time()) < MAX_FUTURE_BLOCK_TIME, "Block has invalid timestamp"
+        assert abs(block.timestamp - time.time()) < MAX_FUTURE_BLOCK_TIME, "Block has invalid timestamp"
 
         if validate_txns:
 
             # Validate coinbase separately
-            self.validate_coinbase(block.txns[0])
+            self.validate_coinbase(block)
 
             # Check the transactions are valid
             for tx in block.txns[1:]:
@@ -375,16 +378,27 @@ class Node:
         else:
             return prev_block.bits
 
+    def calculate_fee(self, txns):
+        fee = 0
+        for txn in txns:
+            inputs = outputs = 0
+            for tx_in in txn.tx_ins:
+                inputs += self.utxo_set[tx_in.outpoint].amount
+            for tx_out in txn.tx_outs:
+                outputs += tx_out.amount
+            fee += inputs - outputs
+        return fee
 
     def get_block_subsidy(self):
         halvings = len(self.blocks) // HALVE_SUBSIDY_AFTER_BLOCKS_NUM
 
+        # FIXME: can I kill this???
         if halvings >= 64:
             return 0
 
         return 50 * SATOSHIS_PER_COIN // (2 ** halvings)
 
-def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
+def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, fee):
     sender_public_key = sender_private_key.get_verifying_key()
 
     # Construct tx.tx_outs
@@ -393,15 +407,15 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     for tx_out in utxos:
         tx_ins.append(TxIn(tx_id=tx_out.tx_id, index=tx_out.index, signature=None))
         tx_in_sum += tx_out.amount
-        if tx_in_sum > amount:
+        if tx_in_sum > amount + fee:
             break
 
     # Make sure sender can afford it
-    assert tx_in_sum >= amount
+    assert tx_in_sum >= amount + fee
 
     # Construct tx.tx_outs
     tx_id = uuid.uuid4()
-    change = tx_in_sum - amount
+    change = tx_in_sum - amount - fee
     tx_outs = [
         TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
         TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
@@ -414,7 +428,7 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
 
     return tx
 
-def prepare_coinbase(public_key, tx_id=None):
+def prepare_coinbase(public_key, amount, tx_id=None):
     if tx_id is None:
         tx_id = uuid.uuid4()
     # FIXME kinda shitty to implicitly use global node here ...
@@ -426,8 +440,7 @@ def prepare_coinbase(public_key, tx_id=None):
             TxIn(None, None, None),    
         ],
         tx_outs=[
-            TxOut(tx_id=tx_id, index=0, amount=node.get_block_subsidy(),
-                  public_key=public_key),
+            TxOut(tx_id=tx_id, index=0, amount=amount, public_key=public_key),
         ],
     )
 
@@ -454,7 +467,11 @@ def mine_forever(public_key):
     while True:
         bits = node.get_next_bits(node.blocks[-1].id)
         logger.info(f"BITS = {bits}")
-        coinbase = prepare_coinbase(public_key)
+
+        fees = node.calculate_fee(node.mempool)
+        coinbase_amount = fees + node.get_block_subsidy()
+        coinbase = prepare_coinbase(public_key, coinbase_amount)
+
         unmined_block = Block(
             txns=[coinbase] + node.mempool,
             prev_id=node.blocks[-1].id,
@@ -462,6 +479,7 @@ def mine_forever(public_key):
             bits=bits,
             timestamp=time.time(),
         )
+
         mined_block = mine_block(unmined_block)
 
         if mined_block:
@@ -471,14 +489,13 @@ def mine_forever(public_key):
                 node.handle_block(mined_block)
 
 def mine_genesis_block(node, public_key):
-    coinbase = prepare_coinbase(public_key, tx_id="abc123")
+    coinbase = prepare_coinbase(public_key, node.get_block_subsidy(), tx_id="abc123")
     # FIXME: now it seems the genesis block must hard-coded
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0,
             bits=INITIAL_DIFFICULTY_BITS, timestamp=1545883906)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.connect_tx(coinbase)
-    logger.info(f"Genesis ID: {mined_block.id}")
     return mined_block
 
 ##############
@@ -703,7 +720,7 @@ def main(args):
         utxos = response["data"]
 
         # Prepare transaction
-        tx = prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
+        tx = prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, fee=100)
 
         # send to node
         send_message(address, "tx", tx)
