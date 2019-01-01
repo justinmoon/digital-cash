@@ -31,7 +31,7 @@ GET_BLOCKS_CHUNK = 10
 HALVENING_INTERVAL = 60 * 24            # daily (assuming 1 minute blocks)
 
 INITIAL_DIFFICULTY_BITS = 15
-BLOCK_TIME_IN_SECS = 5
+BLOCK_TIME_IN_SECS = 1
 BLOCKS_PER_DIFFICULTY_PERIOD = 5
 DIFFICULTY_PERIOD_IN_SECS = BLOCK_TIME_IN_SECS * BLOCKS_PER_DIFFICULTY_PERIOD
 
@@ -243,16 +243,16 @@ class Node:
         assert block.proof < block.target, "Insufficient Proof-of-Work"
 
         if validate_txns:
+            # Check block timestamps not too far in future
             assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
                 "Block too far into future"
-            chain_ids = [b.id for b in self.blocks]
-            index = max(chain_ids.index(block.prev_id) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
-            if index >= 0:
-                b = self.blocks[index]
-                assert time.time() - b.timestamp > 0,\
-                    "Block periods cannot go backwards in time"
 
-            # FIXME: I'm abusing this flag ...
+            # Check block timestamps not too far in past
+            height = max(len(self.blocks) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+            assert block.timestamp > self.blocks[height].timestamp, \
+                "Block periods cannot go backwards in time"
+
+            # Check difficulty adjustment
             assert block.bits == self.get_next_bits(block.prev_id)
 
             # Validate coinbase separately
@@ -309,9 +309,7 @@ class Node:
             logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
             # Reorg if branch now has more work than main chain
-
-            chain_ids = [block.id for block in self.blocks]
-            fork_height = chain_ids.index(branch[0].prev_id)
+            _, fork_height = self.find_in_blocks(branch[0].prev_id)
             chain_since_fork = self.blocks[fork_height+1:]
             if total_work(branch) > total_work(chain_since_fork):
                 logger.info(f"Reorging to branch {branch_index}")
@@ -359,11 +357,8 @@ class Node:
 
     def get_next_bits(self, block_id):
         # Check main chain & branches for this block id
-        chain_ids = [block.id for block in self.blocks]
-        if block_id in chain_ids:
-            height = chain_ids.index(block_id)
-            block = self.blocks[height]
-        else:
+        block, height = self.find_in_blocks(block_id)
+        if block is None:
             branch, branch_index, height = self.find_in_branch(block_id)
             block = branch[branch_index]
         assert block is not None and height is not None
