@@ -1,9 +1,8 @@
 """
-Bitcoin Part 2
-* Difficulty adjustment w/o fees
+Bitcoin Part 3
+* Difficulty adjustment
 * Introduce notion of "block periods"
 * Block.bits, Block.timestamp, Block.target
-* Node.get_next_bits
 
 Usage:
   bitcoin.py serve
@@ -32,10 +31,9 @@ GET_BLOCKS_CHUNK = 10
 HALVENING_INTERVAL = 60 * 24            # daily (assuming 1 minute blocks)
 
 INITIAL_DIFFICULTY_BITS = 15
-TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 5
-DIFFICULTY_PERIOD_IN_BLOCKS = 5
-DIFFICULTY_PERIOD_IN_SECS_TARGET = DIFFICULTY_PERIOD_IN_BLOCKS * TIME_BETWEEN_BLOCKS_IN_SECS_TARGET
-BLOCK_TIME_WINDOW = DIFFICULTY_PERIOD_IN_SECS_TARGET
+BLOCK_TIME_IN_SECS = 5
+BLOCKS_PER_DIFFICULTY_PERIOD = 5
+DIFFICULTY_PERIOD_IN_SECS = BLOCK_TIME_IN_SECS * BLOCKS_PER_DIFFICULTY_PERIOD
 
 
 logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
@@ -243,9 +241,17 @@ class Node:
 
     def validate_block(self, block, validate_txns=False):
         assert block.proof < block.target, "Insufficient Proof-of-Work"
-        assert abs(block.timestamp - time.time()) < BLOCK_TIME_WINDOW, "Block has invalid timestamp"
 
         if validate_txns:
+            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
+                "Block too far into future"
+            chain_ids = [b.id for b in self.blocks]
+            index = max(chain_ids.index(block.prev_id) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+            if index >= 0:
+                b = self.blocks[index]
+                assert time.time() - b.timestamp > 0,\
+                    "Block periods cannot go backwards in time"
+
             # FIXME: I'm abusing this flag ...
             assert block.bits == self.get_next_bits(block.prev_id)
 
@@ -262,6 +268,14 @@ class Node:
                 if block.id == block_id:
                     return branch, branch_index, height
         return None, None, None
+
+    def find_in_blocks(self, block_id):
+        block_ids = [block.id for block in self.blocks]
+        if block_id in block_ids:
+            height = block_ids.index(block_id)
+            block = self.blocks[height]
+            return block, height
+        return None, None
 
     def handle_block(self, block):
         # Ignore if we've already seen it
@@ -343,35 +357,34 @@ class Node:
         for tx in block.txns:
             self.connect_tx(tx)
 
-    def get_next_bits(self, prev_block_id):
+    def get_next_bits(self, block_id):
         # Check main chain & branches for this block id
         chain_ids = [block.id for block in self.blocks]
-        if prev_block_id in chain_ids:
-            prev_height = chain_ids.index(prev_block_id)
-            prev_block = self.blocks[prev_height]
+        if block_id in chain_ids:
+            height = chain_ids.index(block_id)
+            block = self.blocks[height]
         else:
-            branch, branch_index, prev_height = self.find_in_branch(prev_block_id)
-            prev_block = branch[branch_index]
-        assert prev_block is not None and prev_height is not None
+            branch, branch_index, height = self.find_in_branch(block_id)
+            block = branch[branch_index]
+        assert block is not None and height is not None
 
         # Calculate how long this difficulty period lasted
         period_start_index = max(
-            prev_height - (DIFFICULTY_PERIOD_IN_BLOCKS - 1), 0)
+            height - (BLOCKS_PER_DIFFICULTY_PERIOD - 1), 0)
         period_start_block = self.blocks[period_start_index]
-        period_duration = prev_block.timestamp - period_start_block.timestamp
-        logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS_TARGET} actual: {period_duration}")
+        period_duration = block.timestamp - period_start_block.timestamp
 
         # Adjust once per period
-        if prev_height % DIFFICULTY_PERIOD_IN_BLOCKS != 0:
-            return prev_block.bits
+        if height % BLOCKS_PER_DIFFICULTY_PERIOD != 0:
+            return block.bits
+
+        logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS} actual: {period_duration}")
 
         # Adjust bits
-        if period_duration < DIFFICULTY_PERIOD_IN_SECS_TARGET:
-            return prev_block.bits + 1
-        elif period_duration > DIFFICULTY_PERIOD_IN_SECS_TARGET:
-            return prev_block.bits - 1
+        if period_duration <= DIFFICULTY_PERIOD_IN_SECS:
+            return block.bits + 1
         else:
-            return prev_block.bits
+            return block.bits - 1
 
     def get_block_subsidy(self):
         halvings = len(self.blocks) // HALVENING_INTERVAL
