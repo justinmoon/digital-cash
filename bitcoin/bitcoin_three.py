@@ -244,7 +244,7 @@ class Node:
 
         if validate_txns:
             # Check block timestamps cannot be too in future from our POV
-            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
+            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS, \
                 "Block too far into future"
 
             # Block timestamps must advance every block period
@@ -253,7 +253,7 @@ class Node:
                 "Block periods cannot go backwards in time"
 
             # Check difficulty adjustment
-            assert block.bits == self.get_next_bits(block.prev_id)
+            assert block.bits == self.get_next_bits(block.prev_id, log=True)
 
             # Validate coinbase separately
             self.validate_coinbase(block)
@@ -349,7 +349,7 @@ class Node:
         for tx in block.txns:
             self.connect_tx(tx)
 
-    def get_next_bits(self, block_id):
+    def get_next_bits(self, block_id, log=False):
         # Check main chain & branches for this block id
         chain_ids = [block.id for block in self.blocks]
         if block_id in chain_ids:
@@ -357,26 +357,39 @@ class Node:
             block = self.blocks[height]
         else:
             branch, branch_index, height = self.find_in_branch(block_id)
-            block = branch[branch_index]
-        assert block is not None and height is not None
+            block = branch[height]
 
-        # Calculate how long this difficulty period lasted
-        period_start_index = max(
-            height - (BLOCKS_PER_DIFFICULTY_PERIOD - 1), 0)
-        period_start_block = self.blocks[period_start_index]
-        period_duration = block.timestamp - period_start_block.timestamp
+        next_height = height + 1
+        next_block_period = next_height // BLOCKS_PER_DIFFICULTY_PERIOD
+        next_block_period_height = next_height % BLOCKS_PER_DIFFICULTY_PERIOD
 
-        # Adjust once per period
-        if height % BLOCKS_PER_DIFFICULTY_PERIOD != 0:
+        # Only adjust if the next block will be first block of a new difficulty period
+        if next_block_period_height != 0:
             return block.bits
 
-        logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS} actual: {period_duration}")
+        # Calculate how long this difficulty period lasted
+        one_period_ago_index = max(
+            height - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+        one_period_ago_block = self.blocks[one_period_ago_index]
+        period_duration = block.timestamp - one_period_ago_block.timestamp
 
         # Adjust bits
         if period_duration <= DIFFICULTY_PERIOD_IN_SECS:
-            return block.bits + 1
+            next_bits = block.bits + 1
         else:
-            return block.bits - 1
+            next_bits = block.bits - 1
+
+        # Log information about this period if flag is set
+        if log:
+            logger.info(
+                "(difficulty adjustment) "
+                f"period={next_block_period} "
+                f"target={DIFFICULTY_PERIOD_IN_SECS} "
+                f"measured={period_duration} "
+                f"bits={block.bits}->{next_bits}"
+            )
+
+        return next_bits
 
     def get_block_subsidy(self):
         halvings = len(self.blocks) // HALVENING_INTERVAL
@@ -469,14 +482,15 @@ def mine_forever(public_key):
 
         if mined_block:
             logger.info("")
-            logger.info(f"Mined a block bits={mined_block.bits}")
+            logger.info("Mined a block")
             with lock:
                 node.handle_block(mined_block)
 
 def mine_genesis_block(node, public_key):
-    coinbase = prepare_coinbase(public_key, node.get_block_subsidy(), tx_id="abc123")
+    coinbase = prepare_coinbase(public_key, 
+            node.get_block_subsidy(), tx_id="abc123")
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0,
-            bits=INITIAL_DIFFICULTY_BITS, timestamp=1545883906)
+            bits=INITIAL_DIFFICULTY_BITS, timestamp=1546313133.5823712)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.connect_tx(coinbase)
