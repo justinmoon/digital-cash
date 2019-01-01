@@ -31,7 +31,7 @@ GET_BLOCKS_CHUNK = 10
 HALVENING_INTERVAL = 60 * 24            # daily (assuming 1 minute blocks)
 
 INITIAL_DIFFICULTY_BITS = 15
-BLOCK_TIME_IN_SECS = 1
+BLOCK_TIME_IN_SECS = 5
 BLOCKS_PER_DIFFICULTY_PERIOD = 5
 DIFFICULTY_PERIOD_IN_SECS = BLOCK_TIME_IN_SECS * BLOCKS_PER_DIFFICULTY_PERIOD
 
@@ -243,11 +243,11 @@ class Node:
         assert block.proof < block.target, "Insufficient Proof-of-Work"
 
         if validate_txns:
-            # Check block timestamps not too far in future
+            # Check block timestamps cannot be too in future from our POV
             assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
                 "Block too far into future"
 
-            # Check block timestamps not too far in past
+            # Block timestamps must advance every block period
             height = max(len(self.blocks) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
             assert block.timestamp > self.blocks[height].timestamp, \
                 "Block periods cannot go backwards in time"
@@ -268,14 +268,6 @@ class Node:
                 if block.id == block_id:
                     return branch, branch_index, height
         return None, None, None
-
-    def find_in_blocks(self, block_id):
-        block_ids = [block.id for block in self.blocks]
-        if block_id in block_ids:
-            height = block_ids.index(block_id)
-            block = self.blocks[height]
-            return block, height
-        return None, None
 
     def handle_block(self, block):
         # Ignore if we've already seen it
@@ -309,7 +301,9 @@ class Node:
             logger.info(f"Extended branch {branch_index} to {len(branch)}")
 
             # Reorg if branch now has more work than main chain
-            _, fork_height = self.find_in_blocks(branch[0].prev_id)
+
+            chain_ids = [block.id for block in self.blocks]
+            fork_height = chain_ids.index(branch[0].prev_id)
             chain_since_fork = self.blocks[fork_height+1:]
             if total_work(branch) > total_work(chain_since_fork):
                 logger.info(f"Reorging to branch {branch_index}")
@@ -357,8 +351,11 @@ class Node:
 
     def get_next_bits(self, block_id):
         # Check main chain & branches for this block id
-        block, height = self.find_in_blocks(block_id)
-        if block is None:
+        chain_ids = [block.id for block in self.blocks]
+        if block_id in chain_ids:
+            height = chain_ids.index(block_id)
+            block = self.blocks[height]
+        else:
             branch, branch_index, height = self.find_in_branch(block_id)
             block = branch[branch_index]
         assert block is not None and height is not None
