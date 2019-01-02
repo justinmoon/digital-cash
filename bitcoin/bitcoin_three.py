@@ -1,7 +1,7 @@
 """
 Bitcoin Part 3
 * Difficulty adjustment
-* Introduce notion of "block periods"
+* Introduce notion of "difficulty periods"
 * Block.bits, Block.timestamp, Block.target
 
 Usage:
@@ -30,11 +30,10 @@ SATOSHIS_PER_COIN = 100_000_000
 GET_BLOCKS_CHUNK = 10
 HALVENING_INTERVAL = 60 * 24            # daily (assuming 1 minute blocks)
 
-INITIAL_DIFFICULTY_BITS = 15
-BLOCK_TIME_IN_SECS = 5
+INITIAL_DIFFICULTY_BITS = 17
+BLOCK_TIME_IN_SECS = 1
 BLOCKS_PER_DIFFICULTY_PERIOD = 5
 DIFFICULTY_PERIOD_IN_SECS = BLOCK_TIME_IN_SECS * BLOCKS_PER_DIFFICULTY_PERIOD
-
 
 logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
 logger = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ def spend_message(tx, index):
     return serialize(outpoint) + serialize(tx.tx_outs)
 
 def total_work(blocks):
-    return len(blocks)
+    return sum([2**block.bits for block in blocks])
 
 def tx_in_to_tx_out(tx_in, blocks):
     for block in blocks:
@@ -226,7 +225,6 @@ class Node:
     def validate_coinbase(self, block):
         tx = block.txns[0]
         assert len(tx.tx_ins) == len(tx.tx_outs) == 1
-        
         fees = self.calculate_fees(block.txns[1:])
         assert tx.tx_outs[0].amount == self.get_block_subsidy() + fees
 
@@ -243,13 +241,13 @@ class Node:
         assert block.proof < block.target, "Insufficient Proof-of-Work"
 
         if validate_txns:
-            # Check block timestamps cannot be too in future from our POV
-            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS, \
-                "Block too far into future"
+            # Check block timestamps cannot be too far in future
+            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
+                "Block too far in future"
 
             # Block timestamps must advance every block period
             height = max(len(self.blocks) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
-            assert block.timestamp > self.blocks[height].timestamp, \
+            assert block.timestamp > self.blocks[height].timestamp,\
                 "Block periods cannot go backwards in time"
 
             # Check difficulty adjustment
@@ -349,51 +347,9 @@ class Node:
         for tx in block.txns:
             self.connect_tx(tx)
 
-    def get_next_bits(self, block_id, log=False):
-        # Check main chain & branches for this block id
-        chain_ids = [block.id for block in self.blocks]
-        if block_id in chain_ids:
-            height = chain_ids.index(block_id)
-            block = self.blocks[height]
-        else:
-            branch, branch_index, height = self.find_in_branch(block_id)
-            block = branch[height]
-
-        next_height = height + 1
-        next_block_period = next_height // BLOCKS_PER_DIFFICULTY_PERIOD
-        next_block_period_height = next_height % BLOCKS_PER_DIFFICULTY_PERIOD
-
-        # Only adjust if the next block will be first block of a new difficulty period
-        if next_block_period_height != 0:
-            return block.bits
-
-        # Calculate how long this difficulty period lasted
-        one_period_ago_index = max(
-            height - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
-        one_period_ago_block = self.blocks[one_period_ago_index]
-        period_duration = block.timestamp - one_period_ago_block.timestamp
-
-        # Adjust bits
-        if period_duration <= DIFFICULTY_PERIOD_IN_SECS:
-            next_bits = block.bits + 1
-        else:
-            next_bits = block.bits - 1
-
-        # Log information about this period if flag is set
-        if log:
-            logger.info(
-                "(difficulty adjustment) "
-                f"period={next_block_period} "
-                f"target={DIFFICULTY_PERIOD_IN_SECS} "
-                f"measured={period_duration} "
-                f"bits={block.bits}->{next_bits}"
-            )
-
-        return next_bits
-
     def get_block_subsidy(self):
         halvings = len(self.blocks) // HALVENING_INTERVAL
-        return 50 * (SATOSHIS_PER_COIN // (2 ** halvings))
+        return (50 * SATOSHIS_PER_COIN) // (2 ** halvings)
 
     def calculate_fees(self, txns):
         fees = 0
@@ -405,6 +361,45 @@ class Node:
                 outputs += tx_out.amount
             fees += inputs - outputs
         return fees
+
+    def get_next_bits(self, block_id, log=False):
+        # Find the block
+        height = [block.id for block in self.blocks].index(block_id)
+        block = self.blocks[height]
+
+        # Will we enter a new difficulty period?
+        next_height = height + 1
+        next_block_period = next_height // BLOCKS_PER_DIFFICULTY_PERIOD
+        next_block_period_height = next_height % BLOCKS_PER_DIFFICULTY_PERIOD
+
+        # Only change bits if we're entering a new difficulty period
+        if next_block_period_height != 0:
+            return block.bits
+
+        # Calculate how long this difficulty period lasted
+        one_period_ago_index = max(
+            height - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+        one_period_ago_block = self.blocks[one_period_ago_index]
+        period_duration = block.timestamp - one_period_ago_block.timestamp
+
+        # Calculate next bits
+        if period_duration <= DIFFICULTY_PERIOD_IN_SECS:
+            next_bits = block.bits + 1
+        else:
+            next_bits = block.bits - 1
+
+        # Log some information
+        if log:
+            logger.info(
+                "(difficulty adjustment) "
+                f"period={next_block_period} "
+                f"target={DIFFICULTY_PERIOD_IN_SECS} "
+                f"duration={period_duration} "
+                f"bits={block.bits}->{next_bits} "
+            )
+        
+        return next_bits
+
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, fee):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -419,7 +414,7 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, f
             break
 
     # Make sure sender can afford it
-    assert tx_in_sum >= amount + feet
+    assert tx_in_sum >= amount + fee
 
     # Construct tx.tx_outs
     tx_id = uuid.uuid4()
@@ -490,7 +485,7 @@ def mine_genesis_block(node, public_key):
     coinbase = prepare_coinbase(public_key, 
             node.get_block_subsidy(), tx_id="abc123")
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0,
-            bits=INITIAL_DIFFICULTY_BITS, timestamp=1546313133.5823712)
+            bits=INITIAL_DIFFICULTY_BITS, timestamp=1546383741.5890396)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.connect_tx(coinbase)

@@ -1,11 +1,11 @@
 """
-POWCoin
+Bitcoin
 
 Usage:
-  powcoin.py serve
-  powcoin.py ping [--node <node>]
-  powcoin.py tx <from> <to> <amount> [--node <node>]
-  powcoin.py balance <name> [--node <node>]
+  bitcoin.py serve
+  bitcoin.py ping [--node <node>]
+  bitcoin.py tx <from> <to> <amount> [--node <node>]
+  bitcoin.py balance <name> [--node <node>]
 
 Options:
   -h --help      Show this screen.
@@ -19,27 +19,18 @@ from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
 
 PORT = 10000
-GET_BLOCKS_CHUNK = 10
-BLOCK_SUBSIDY = 50
 node = None
 lock = threading.Lock()
-
-INITIAL_DIFFICULTY_BITS = 15
 mining_interrupt = threading.Event()
 
-
-# TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 1 * 60
-# DIFFICULTY_PERIOD_IN_SECS_TARGET = 60 * 60 * 10
-# MAX_FUTURE_BLOCK_TIME = (60 * 60 * 2)
-
-TIME_BETWEEN_BLOCKS_IN_SECS_TARGET = 5
-DIFFICULTY_PERIOD_IN_SECS_TARGET = 30
-MAX_FUTURE_BLOCK_TIME = (60 * 60 * 2)  # FIXME
-
-DIFFICULTY_PERIOD_IN_BLOCKS = \
-    int(DIFFICULTY_PERIOD_IN_SECS_TARGET / TIME_BETWEEN_BLOCKS_IN_SECS_TARGET)
-HALVE_SUBSIDY_AFTER_BLOCKS_NUM = 210_000  # FIXME
 SATOSHIS_PER_COIN = 100_000_000
+GET_BLOCKS_CHUNK = 10
+HALVENING_INTERVAL = 60 * 24            # daily (assuming 1 minute blocks)
+
+INITIAL_DIFFICULTY_BITS = 17
+BLOCK_TIME_IN_SECS = 1
+BLOCKS_PER_DIFFICULTY_PERIOD = 5
+DIFFICULTY_PERIOD_IN_SECS = BLOCK_TIME_IN_SECS * BLOCKS_PER_DIFFICULTY_PERIOD
 
 logging.basicConfig(level="INFO", format='%(threadName)-6s | %(message)s')
 logger = logging.getLogger(__name__)
@@ -50,7 +41,7 @@ def spend_message(tx, index):
     return serialize(outpoint) + serialize(tx.tx_outs)
 
 def total_work(blocks):
-    return len(blocks)
+    return sum([2**block.bits for block in blocks])
 
 def tx_in_to_tx_out(tx_in, blocks):
     for block in blocks:
@@ -229,10 +220,9 @@ class Node:
         assert in_sum >= out_sum
 
     def validate_coinbase(self, block):
-        tx = block.txns[0]  # FIXME
+        tx = block.txns[0]
         assert len(tx.tx_ins) == len(tx.tx_outs) == 1
-
-        fees = self.calculate_fee(block.txns[1:])
+        fees = self.calculate_fees(block.txns[1:])
         assert tx.tx_outs[0].amount == self.get_block_subsidy() + fees
 
     def handle_tx(self, tx):
@@ -246,9 +236,19 @@ class Node:
 
     def validate_block(self, block, validate_txns=False):
         assert block.proof < block.target, "Insufficient Proof-of-Work"
-        assert abs(block.timestamp - time.time()) < MAX_FUTURE_BLOCK_TIME, "Block has invalid timestamp"
 
         if validate_txns:
+            # Check block timestamps cannot be too far in future
+            assert block.timestamp - time.time() < DIFFICULTY_PERIOD_IN_SECS,\
+                "Block too far in future"
+
+            # Block timestamps must advance every block period
+            height = max(len(self.blocks) - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+            assert block.timestamp > self.blocks[height].timestamp,\
+                "Block periods cannot go backwards in time"
+
+            # Check difficulty adjustment
+            assert block.bits == self.get_next_bits(block.prev_id, log=True)
 
             # Validate coinbase separately
             self.validate_coinbase(block)
@@ -344,59 +344,59 @@ class Node:
         for tx in block.txns:
             self.connect_tx(tx)
 
-    def get_next_bits(self, prev_block_id):
-        # check main chain
-        chain_ids = [block.id for block in self.blocks]
-        if prev_block_id in chain_ids:
-            prev_height = chain_ids.index(prev_block_id)
-            prev_block = self.blocks[prev_height]
-        else:
-            # check branches
-            branch, branch_index, prev_height = self.find_in_branch(prev_block_id)
-            prev_block = branch[branch_index]
+    def get_block_subsidy(self):
+        halvings = len(self.blocks) // HALVENING_INTERVAL
+        return (50 * SATOSHIS_PER_COIN) // (2 ** halvings)
 
-        assert prev_block is not None and prev_height is not None
-
-
-        period_start_index = prev_height - (DIFFICULTY_PERIOD_IN_BLOCKS - 1)
-        if period_start_index < 0:
-            return prev_block.bits
-
-        period_start_block = self.blocks[period_start_index]
-        actual_time_taken = prev_block.timestamp - period_start_block.timestamp
-        logger.info(f"target: {DIFFICULTY_PERIOD_IN_SECS_TARGET} actual: {actual_time_taken}")
-
-        # Only adjust every 5th block
-        if prev_height % DIFFICULTY_PERIOD_IN_BLOCKS != 0:
-            return prev_block.bits
-
-        # Adjust bits
-        if actual_time_taken < DIFFICULTY_PERIOD_IN_SECS_TARGET:
-            return prev_block.bits + 1
-        elif actual_time_taken > DIFFICULTY_PERIOD_IN_SECS_TARGET:
-            return prev_block.bits - 1
-        else:
-            return prev_block.bits
-
-    def calculate_fee(self, txns):
-        fee = 0
+    def calculate_fees(self, txns):
+        fees = 0
         for txn in txns:
             inputs = outputs = 0
             for tx_in in txn.tx_ins:
                 inputs += self.utxo_set[tx_in.outpoint].amount
             for tx_out in txn.tx_outs:
                 outputs += tx_out.amount
-            fee += inputs - outputs
-        return fee
+            fees += inputs - outputs
+        return fees
 
-    def get_block_subsidy(self):
-        halvings = len(self.blocks) // HALVE_SUBSIDY_AFTER_BLOCKS_NUM
+    def get_next_bits(self, block_id, log=False):
+        # Find the block
+        height = [block.id for block in self.blocks].index(block_id)
+        block = self.blocks[height]
 
-        # FIXME: can I kill this???
-        if halvings >= 64:
-            return 0
+        # Will we enter a new difficulty period?
+        next_height = height + 1
+        next_block_period = next_height // BLOCKS_PER_DIFFICULTY_PERIOD
+        next_block_period_height = next_height % BLOCKS_PER_DIFFICULTY_PERIOD
 
-        return 50 * SATOSHIS_PER_COIN // (2 ** halvings)
+        # Only change bits if we're entering a new difficulty period
+        if next_block_period_height != 0:
+            return block.bits
+
+        # Calculate how long this difficulty period lasted
+        one_period_ago_index = max(
+            height - BLOCKS_PER_DIFFICULTY_PERIOD, 0)
+        one_period_ago_block = self.blocks[one_period_ago_index]
+        period_duration = block.timestamp - one_period_ago_block.timestamp
+
+        # Calculate next bits
+        if period_duration <= DIFFICULTY_PERIOD_IN_SECS:
+            next_bits = block.bits + 1
+        else:
+            next_bits = block.bits - 1
+
+        # Log some information
+        if log:
+            logger.info(
+                "(difficulty adjustment) "
+                f"period={next_block_period} "
+                f"target={DIFFICULTY_PERIOD_IN_SECS} "
+                f"duration={period_duration} "
+                f"bits={block.bits}->{next_bits} "
+            )
+        
+        return next_bits
+
 
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, fee):
     sender_public_key = sender_private_key.get_verifying_key()
@@ -415,7 +415,7 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, f
 
     # Construct tx.tx_outs
     tx_id = uuid.uuid4()
-    change = tx_in_sum - amount - fee
+    change = tx_in_sum - (amount + fee)
     tx_outs = [
         TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
         TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
@@ -428,28 +428,23 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount, f
 
     return tx
 
-def prepare_coinbase(public_key, amount, tx_id=None):
+def prepare_coinbase(public_key, block_subsidy, tx_id=None):
     if tx_id is None:
         tx_id = uuid.uuid4()
-    # FIXME kinda shitty to implicitly use global node here ...
-    # FIXME especially testing wise ...
-    # Should we pass subsidy in?
     return Tx(
         id=tx_id,
         tx_ins=[
             TxIn(None, None, None),    
         ],
         tx_outs=[
-            TxOut(tx_id=tx_id, index=0, amount=amount, public_key=public_key),
+            TxOut(tx_id=tx_id, index=0, amount=block_subsidy,
+                  public_key=public_key),
         ],
     )
 
 ##########
 # Mining #
 ##########
-
-
-
 
 def mine_block(block):
     while block.proof >= block.target:
@@ -465,21 +460,16 @@ def mine_block(block):
 def mine_forever(public_key):
     logging.info("Starting miner")
     while True:
-        bits = node.get_next_bits(node.blocks[-1].id)
-        logger.info(f"BITS = {bits}")
-
-        fees = node.calculate_fee(node.mempool)
-        coinbase_amount = fees + node.get_block_subsidy()
-        coinbase = prepare_coinbase(public_key, coinbase_amount)
-
+        block_subsidy = node.get_block_subsidy()
+        fees = node.calculate_fees(node.mempool)
+        coinbase = prepare_coinbase(public_key, block_subsidy + fees)
         unmined_block = Block(
             txns=[coinbase] + node.mempool,
             prev_id=node.blocks[-1].id,
             nonce=random.randint(0, 1000000000),
-            bits=bits,
+            bits=node.get_next_bits(node.blocks[-1].id),
             timestamp=time.time(),
         )
-
         mined_block = mine_block(unmined_block)
 
         if mined_block:
@@ -489,10 +479,10 @@ def mine_forever(public_key):
                 node.handle_block(mined_block)
 
 def mine_genesis_block(node, public_key):
-    coinbase = prepare_coinbase(public_key, node.get_block_subsidy(), tx_id="abc123")
-    # FIXME: now it seems the genesis block must hard-coded
+    coinbase = prepare_coinbase(public_key, 
+            node.get_block_subsidy(), tx_id="abc123")
     unmined_block = Block(txns=[coinbase], prev_id=None, nonce=0,
-            bits=INITIAL_DIFFICULTY_BITS, timestamp=1545883906)
+            bits=INITIAL_DIFFICULTY_BITS, timestamp=1546383741.5890396)
     mined_block = mine_block(unmined_block)
     node.blocks.append(mined_block)
     node.connect_tx(coinbase)
