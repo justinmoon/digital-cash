@@ -11,15 +11,14 @@ Options:
   -h --help     Show this screen.
 """
 
-import uuid, socketserver, socket, sys, argparse
+import socket
+import socketserver
+import uuid
 
 from docopt import docopt
-from copy import deepcopy
-from ecdsa import SigningKey, SECP256k1
-from utils import serialize, deserialize, prepare_simple_tx
 
 from identities import user_public_key, user_private_key
-
+from utils import serialize, deserialize, prepare_simple_tx
 
 
 def spend_message(tx, index):
@@ -44,6 +43,7 @@ class Tx:
         message = spend_message(self, index)
         return public_key.verify(tx_in.signature, message)
 
+
 class TxIn:
 
     def __init__(self, tx_id, index, signature=None):
@@ -54,6 +54,7 @@ class TxIn:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class TxOut:
 
@@ -66,6 +67,7 @@ class TxOut:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class Bank:
 
@@ -117,7 +119,7 @@ class Bank:
         self.update_utxo_set(tx)
 
     def fetch_utxos(self, public_key):
-        return [utxo for utxo in self.utxo_set.values() 
+        return [utxo for utxo in self.utxo_set.values()
                 if utxo.public_key == public_key]
 
     def fetch_balance(self, public_key):
@@ -166,6 +168,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
             balance = bank.fetch_balance(data)
             self.respond(command="balance-response", data=balance)
 
+
 HOST, PORT = 'localhost', 9006
 ADDRESS = (HOST, PORT)
 bank = Bank()
@@ -175,6 +178,7 @@ def serve():
     server = socketserver.TCPServer(ADDRESS, TCPHandler)
     server.serve_forever()
 
+
 def send_message(address, command, data, response=False):
     message = prepare_message(command, data)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -182,6 +186,7 @@ def send_message(address, command, data, response=False):
         s.sendall(serialize(message))
         if response:
             return deserialize(s.recv(5000))
+
 
 def main(args):
     if args["serve"]:

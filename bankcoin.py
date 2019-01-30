@@ -1,6 +1,6 @@
 import uuid
 from copy import deepcopy
-from ecdsa import SigningKey, SECP256k1
+
 from utils import serialize
 
 
@@ -12,7 +12,7 @@ def transfer_message(previous_signature, public_key):
 
 
 class Transfer:
-    
+
     def __init__(self, signature, public_key):
         self.signature = signature
         self.public_key = public_key
@@ -38,7 +38,7 @@ class BankCoin:
         return self.transfers[-1]
 
     def transfer(self, owner_private_key, recipient_public_key):
-        message = transfer_message(self.last_transfer.signature, 
+        message = transfer_message(self.last_transfer.signature,
                                    recipient_public_key)
         transfer = Transfer(
             signature=owner_private_key.sign(message),
@@ -58,6 +58,7 @@ class BankCoin:
             # Next loop we treat transfer as previous_transfer
             previous_transfer = transfer
 
+
 class Bank:
 
     def __init__(self):
@@ -67,13 +68,13 @@ class Bank:
     def issue(self, public_key):
         # Create a message specifying who the coin is being issued to
         message = serialize(public_key)
-        
+
         # Create the first transfer, signing with the banks private key
         transfer = Transfer(
             signature=None,
             public_key=public_key,
         )
-        
+
         # Create and return the coin with just the issuing transfer
         coin = BankCoin(transfers=[transfer])
 
@@ -101,4 +102,3 @@ class Bank:
             if coin.last_transfer.public_key.to_string() == public_key.to_string():
                 coins.append(coin)
         return coins
-

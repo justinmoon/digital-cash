@@ -4,6 +4,7 @@ lock = threading.Lock()
 
 numbers = [0]
 
+
 def counter():
     """Add next number onto list, with a random 
     sleep between reading and writing"""
@@ -13,9 +14,11 @@ def counter():
         time.sleep(.01)
         numbers.append(val)
 
+
 def counter_with_lock():
     with lock:
         counter()
+
 
 def run(target):
     threads = []
@@ -29,6 +32,7 @@ def run(target):
     # Wait for threads to finish
     for thread in threads:
         thread.join()
+
 
 if __name__ == "__main__":
     arg = sys.argv[1]
