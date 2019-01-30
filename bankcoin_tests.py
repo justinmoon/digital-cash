@@ -1,13 +1,15 @@
 from copy import deepcopy
+
 from ecdsa import SigningKey, SECP256k1
-from mybankcoin import Transfer, Bank
-from utils import serialize
+
+from bankcoin import Bank
 
 # The usual suspects
 bob_private_key = SigningKey.generate(curve=SECP256k1)
 alice_private_key = SigningKey.generate(curve=SECP256k1)
 bob_public_key = bob_private_key.get_verifying_key()
 alice_public_key = alice_private_key.get_verifying_key()
+
 
 def test_valid_transfers():
     # Issue a coin and transfer it twice

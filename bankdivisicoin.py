@@ -1,7 +1,4 @@
 import uuid
-from copy import deepcopy
-from ecdsa import SigningKey, SECP256k1
-from utils import serialize
 
 
 class Tx:
@@ -14,6 +11,7 @@ class Tx:
     def sign_input(self, index, private_key):
         signature = private_key.sign(self.tx_ins[index].spend_message)
         self.tx_ins[index].signature = signature
+
 
 class TxIn:
 
@@ -30,6 +28,7 @@ class TxIn:
     def outpoint(self):
         return (self.tx_id, self.index)
 
+
 class TxOut:
 
     def __init__(self, tx_id, index, amount, public_key):
@@ -41,6 +40,7 @@ class TxOut:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class Bank:
 
@@ -89,14 +89,14 @@ class Bank:
 
     def fetch_utxo(self, public_key):
         # Find which (tx_id, index) pairs have been spent
-        spent_pairs = [(tx_in.tx_id, tx_in.index) 
-                        for tx in self.txs.values() 
-                        for tx_in in tx.tx_ins]
+        spent_pairs = [(tx_in.tx_id, tx_in.index)
+                       for tx in self.txs.values()
+                       for tx_in in tx.tx_ins]
         # Return tx_outs associated with public_key and not in ^^ list
-        return [tx_out for tx in self.txs.values() 
-                   for i, tx_out in enumerate(tx.tx_outs)
-                       if public_key.to_string() == tx_out.public_key.to_string()
-                       and (tx.id, i) not in spent_pairs]
+        return [tx_out for tx in self.txs.values()
+                for i, tx_out in enumerate(tx.tx_outs)
+                if public_key.to_string() == tx_out.public_key.to_string()
+                and (tx.id, i) not in spent_pairs]
 
     def fetch_balance(self, public_key):
         # Fetch utxo associated with this public key

@@ -12,18 +12,22 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading
+import logging
+import os
+import socket
+import socketserver
+import threading
+import time
+import uuid
+from copy import deepcopy
 
 from docopt import docopt
-from copy import deepcopy
-from ecdsa import SigningKey, SECP256k1
-from utils import serialize, deserialize
 
 from identities import user_private_key, user_public_key, bank_private_key, bank_public_key, airdrop_tx
-
+from utils import serialize, deserialize
 
 NUM_BANKS = 3
-BLOCK_TIME = 5   # in seconds
+BLOCK_TIME = 5  # in seconds
 PORT = 10000
 bank = None
 
@@ -37,6 +41,7 @@ logger = logging.getLogger(__name__)
 def spend_message(tx, index):
     outpoint = tx.tx_ins[index].outpoint
     return serialize(outpoint) + serialize(tx.tx_outs)
+
 
 class Tx:
 
@@ -55,6 +60,7 @@ class Tx:
         message = spend_message(self, index)
         return public_key.verify(tx_in.signature, message)
 
+
 class TxIn:
 
     def __init__(self, tx_id, index, signature=None):
@@ -65,6 +71,7 @@ class TxIn:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class TxOut:
 
@@ -77,6 +84,7 @@ class TxOut:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class Block:
 
@@ -93,6 +101,7 @@ class Block:
 
     def sign(self, private_key):
         self.signature = private_key.sign(self.message)
+
 
 class Bank:
 
@@ -117,7 +126,7 @@ class Bank:
         return [tx_in.outpoint for tx in self.mempool for tx_in in tx.tx_ins]
 
     def fetch_utxos(self, public_key):
-        return [tx_out for tx_out in self.utxo_set.values() 
+        return [tx_out for tx_out in self.utxo_set.values()
                 if tx_out.public_key == public_key]
 
     def update_utxo_set(self, tx):
@@ -179,7 +188,7 @@ class Bank:
         # If they're all good, update self.blocks and self.utxo_set
         for tx in block.txns:
             self.update_utxo_set(tx)
-        
+
         # Add the block and increment the id of bank who will report next block
         self.blocks.append(block)
 
@@ -219,6 +228,7 @@ class Bank:
         block = Block(txns=[tx])
         self.blocks.append(block)
 
+
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     sender_public_key = sender_private_key.get_verifying_key()
 
@@ -238,7 +248,7 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     tx_id = uuid.uuid4()
     change = tx_in_sum - amount
     tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
+        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key),
         TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
     ]
 
@@ -256,6 +266,7 @@ def prepare_message(command, data):
         "data": data,
     }
 
+
 class TCPHandler(socketserver.BaseRequestHandler):
 
     def respond(self, command, data):
@@ -263,7 +274,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
         return self.request.sendall(serialize(response))
 
     def handle(self):
-        message_bytes = self.request.recv(1024*4).strip()
+        message_bytes = self.request.recv(1024 * 4).strip()
         message = deserialize(message_bytes)
         command = message["command"]
         data = message["data"]
@@ -287,14 +298,17 @@ class TCPHandler(socketserver.BaseRequestHandler):
             utxos = bank.fetch_utxos(data)
             self.respond(command="utxos-response", data=utxos)
 
+
 def external_address(node):
     i = int(node[-1])
     port = PORT + i
     return ('localhost', port)
 
+
 def serve():
     server = socketserver.TCPServer(("0.0.0.0", PORT), TCPHandler)
     server.serve_forever()
+
 
 def send_message(address, command, data, response=False):
     message = prepare_message(command, data)
@@ -303,6 +317,7 @@ def send_message(address, command, data, response=False):
         s.sendall(serialize(message))
         if response:
             return deserialize(s.recv(5000))
+
 
 def main(args):
     if args["serve"]:
