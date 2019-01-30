@@ -1,7 +1,4 @@
 import uuid
-from copy import deepcopy
-from ecdsa import SigningKey, SECP256k1
-from utils import serialize
 
 
 class Tx:
@@ -14,6 +11,7 @@ class Tx:
     def sign_input(self, index, private_key):
         signature = private_key.sign(self.tx_ins[index].spend_message)
         self.tx_ins[index].signature = signature
+
 
 class TxIn:
 
@@ -31,6 +29,7 @@ class TxIn:
     def outpoint(self):
         return (self.tx_id, self.index)
 
+
 class TxOut:
 
     def __init__(self, tx_id, index, amount, public_key):
@@ -42,6 +41,7 @@ class TxOut:
     @property
     def outpoint(self):
         return (self.tx_id, self.index)
+
 
 class Bank:
 
@@ -90,7 +90,7 @@ class Bank:
         self.update_utxo(tx)
 
     def fetch_utxo(self, public_key):
-        return [utxo for utxo in self.utxo.values() 
+        return [utxo for utxo in self.utxo.values()
                 if utxo.public_key.to_string() == public_key.to_string()]
 
     def fetch_balance(self, public_key):

@@ -1,23 +1,29 @@
-import pickle, uuid
+import pickle
+import uuid
+
 
 def serialize(coin):
     return pickle.dumps(coin)
 
+
 def deserialize(serialized):
     return pickle.loads(serialized)
+
 
 def to_disk(coin, filename):
     serialized = serialize(coin)
     with open(filename, "wb") as f:
         f.write(serialized)
 
+
 def from_disk(filename):
     with open(filename, "rb") as f:
         serialized = f.read()
         return deserialize(serialized)
 
+
 def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
-    from mybankcoin import Tx, TxIn, TxOut
+    from bankutxocoin import Tx, TxIn, TxOut  # maybe import from another coin implementation than bankutxocoin?
     sender_public_key = sender_private_key.get_verifying_key()
 
     # Construct tx.tx_outs
@@ -36,7 +42,7 @@ def prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount):
     tx_id = uuid.uuid4()
     change = tx_in_sum - amount
     tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key), 
+        TxOut(tx_id=tx_id, index=0, amount=amount, public_key=recipient_public_key),
         TxOut(tx_id=tx_id, index=1, amount=change, public_key=sender_public_key),
     ]
 

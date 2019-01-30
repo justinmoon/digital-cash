@@ -1,8 +1,7 @@
 import uuid, pytest
 from ecdsa import SigningKey, VerifyingKey, SECP256k1
 from ecdsa.keys import BadSignatureError
-# from bankutxocoin import TxIn, TxOut, Tx, Bank
-from mybanknetcoin import TxIn, TxOut, Tx, Bank
+from banknetcoin import TxIn, TxOut, Tx, Bank
 
 # The usual suspects
 bob_private_key = SigningKey.generate(curve=SECP256k1)
@@ -22,7 +21,7 @@ def test_bank_balances():
     ]
     tx_id = uuid.uuid4()
     tx_outs = [
-        TxOut(tx_id=tx_id, index=0, amount=10, public_key=bob_public_key), 
+        TxOut(tx_id=tx_id, index=0, amount=10, public_key=bob_public_key),
         TxOut(tx_id=tx_id, index=1, amount=990, public_key=alice_public_key),
     ]
     alice_to_bob = Tx(id=tx_id, tx_ins=tx_ins, tx_outs=tx_outs)

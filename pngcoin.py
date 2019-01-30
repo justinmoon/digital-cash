@@ -1,6 +1,4 @@
-import io
 import pickle
-from PIL import Image
 
 
 ###########
@@ -13,7 +11,7 @@ def handle_user_input(user_input):
     elif user_input.lower() == "n":
         return False
     else:
-        user_input  = input('Please enter "y" or "n"')
+        user_input = input('Please enter "y" or "n"')
         return handle_user_input(user_input)
 
 
