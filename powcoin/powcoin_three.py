@@ -208,7 +208,7 @@ class Node:
     def handle_block(self, block):
         # Conditions
         extends_chain = block.prev_id == self.blocks[-1].id
-        forks_chain = not extends chain and \
+        forks_chain = not extends_chain and \
                 block.prev_id in [block.id for block in self.blocks] 
 
         # Always validate, but only validate transactions if extending chain
