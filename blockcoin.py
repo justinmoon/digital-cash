@@ -12,7 +12,7 @@ Options:
   --node=<node>  Hostname of node [default: node0]
 """
 
-import uuid, socketserver, socket, sys, argparse, time, os, logging, threading
+import uuid, socketserver, socket, sys, argparse, time, os, logging, threading, pickle
 
 from docopt import docopt
 from copy import deepcopy
