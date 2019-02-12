@@ -1,6 +1,6 @@
 from copy import deepcopy
 from ecdsa import SigningKey, SECP256k1
-from mybankcoin import Transfer, Bank
+from bankcoin import Transfer, Bank
 from utils import serialize
 
 # The usual suspects
