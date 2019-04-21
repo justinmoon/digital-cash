@@ -35,3 +35,15 @@ jupyter notebook
 This will open up your web browser to a page that looks like the image below. This is [Jupyter Notebook](http://jupyter.org/), which is basically a little website that’s run on only your computer.
 
 Click the "PNGCoin Workbook.ipynb" link to follow along with this first lesson.
+
+### Using Jupyter Notebook
+
+Check out [this tutorial](https://www.dataquest.io/blog/jupyter-notebook-tutorial/) to learn more about using Jupyter Notebook.
+
+If you stop Jupyter for any reason and later want to restart it:
+
+```
+cd digital-cash
+source venv/bin/activate
+jupyter notebook
+```
