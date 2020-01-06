@@ -318,7 +318,7 @@ def main(args):
         bank.schedule_next_block()
         serve()
     elif args["ping"]:
-        address = address_from_host(args["--node"])
+        address = external_address(args["--node"])
         send_message(address, "ping", "")
     elif args["balance"]:
         public_key = user_public_key(args["<name>"])
