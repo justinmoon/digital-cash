@@ -38,7 +38,7 @@ prometheus-client==0.3.1
 prompt-toolkit==1.0.15
 ptyprocess==0.6.0
 py==1.6.0
-Pygments==2.2.0
+Pygments==2.7.4
 pytest==3.8.2
 python-dateutil==2.7.3
 pyzmq==17.1.2
