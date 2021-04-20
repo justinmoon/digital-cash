@@ -38,7 +38,7 @@ pluggy==0.7.1
 prometheus-client==0.3.1
 prompt-toolkit==1.0.15
 ptyprocess==0.6.0
-py==1.6.0
+py==1.10.0
 Pygments==2.2.0
 pytest==3.8.2
 python-dateutil==2.7.3
