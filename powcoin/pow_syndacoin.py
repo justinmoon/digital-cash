@@ -233,17 +233,19 @@ def mine_block(block):
 def mine_forever():
     logging.info("Starting miner")
     while True:
-        unmined_block = Block(
-            txns=node.mempool,
-            prev_id=node.blocks[-1].id,
-            nonce=random.randint(0, 1000000000),
-        )
-        mined_block = mine_block(unmined_block)
+        while not mining_interrupt.is_set():
+            unmined_block = Block(
+                txns=node.mempool,
+                prev_id=node.blocks[-1].id,
+                nonce=random.randint(0, 1000000000),
+            )
+            mined_block = mine_block(unmined_block)
 
-        if mined_block:
-            logger.info("")
-            logger.info("Mined a block")
-            node.handle_block(mined_block)
+            if mined_block:
+                logger.info("")
+                logger.info("Mined a block")
+                node.handle_block(mined_block)
+
 
 def mine_genesis_block():
     global node
