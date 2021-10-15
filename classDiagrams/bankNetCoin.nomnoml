@@ -1,0 +1,54 @@
+#spacing: 45
+
+[Tx|
+id;
+tx_ins;
+tx_outs|
+
+__init__(self, id, tx_ins, tx_outs)
+sign_input(self, index, private_key)
+]
+
+[TxIn|
+tx_id;
+index;
+signature;
+outpoint(self) -> returns <tuple> (tx_id, index)|
+__init__(self, tx_id, index, signature=None)
+]
+
+[TxOut|
+tx_id;
+index;
+amount;
+public_key;
+outpoint(self) -> returns <tuple> (tx_id, index)|
+__init__(self, tx_id, index, amount, public_key)
+]
+
+
+[Bank|
+utxo={} <tuple>(tx_id, index) -> tx_out|
+[utxo_set <tuple> (tx_id, index) -> tx_out]
+  |
+__init__(self);
+update_utxo(self, tx);
+issue(self, amount, public_key);
+validate_tx(self, tx);
+handle_tx(self, tx);
+fetch_utxo(self, public_key);
+fetch_balance(self, public_key)]
+
+
+[Global Helper|
+|
+spend_message(tx, index)
+prepare_simple_tx(utxos, sender_private_key, recipient_public_key, amount)
+]
+
+[Bank]TxOut +-> 0..* [TxOut]
+
+
+[Tx]+-> 0..* [TxIn]
+[Tx]+-> 0..* [TxOut]
+
