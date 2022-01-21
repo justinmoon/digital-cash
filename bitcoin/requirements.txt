@@ -13,7 +13,7 @@ git+https://github.com/justinmoon/python-ecdsa.git@b3c02e84dd2170a38b79e7d7bfb79
 entrypoints==0.2.3
 html5lib==1.0.1
 ipykernel==4.10.0
-ipython==6.5.0
+ipython==7.16.3
 ipython-genutils==0.2.0
 ipywidgets==7.4.2
 jedi==0.12.1
